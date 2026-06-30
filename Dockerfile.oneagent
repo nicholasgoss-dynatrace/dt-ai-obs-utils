@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+# wget needed to download the OneAgent installer at container startup
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements_oneagent.txt .
+RUN pip install --no-cache-dir -r requirements_oneagent.txt
+
+COPY app_oneagent.py .
+COPY docker-entrypoint-oneagent.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+# Entrypoint downloads + installs OneAgent, then starts uvicorn.
+# Set DT_PAAS_TOKEN and DT_ENDPOINT in your .env to enable instrumentation.
+ENTRYPOINT ["/entrypoint.sh"]

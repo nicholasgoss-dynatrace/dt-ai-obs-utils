@@ -1,0 +1,55 @@
+services:
+
+  # ── OneAgent (auto-instrumentation, zero code changes) ──────────────────────
+  # Port: http://localhost:8001/ask
+  # Requires DT_PAAS_TOKEN in .env to download + install OneAgent at startup.
+  # Get a PaaS token from: Settings > Integration > Platform as a Service
+  oneagent:
+    build:
+      context: .
+      dockerfile: Dockerfile.oneagent
+    ports:
+      - "8001:8000"
+    env_file: .env
+    environment:
+      - DT_PAAS_TOKEN=${DT_PAAS_TOKEN}
+
+  # ── OpenLLMetry (traceloop-sdk, sends OTLP directly to Dynatrace) ───────────
+  # Port: http://localhost:8002/ask
+  openllmetry:
+    build:
+      context: .
+      dockerfile: Dockerfile.openllmetry
+    ports:
+      - "8002:8000"
+    env_file: .env
+
+  # ── OpenInference (openinference-instrumentation-openai + OTel Collector) ───
+  # Port: http://localhost:8003/ask
+  # Sends spans to the otel-collector service, which normalizes attrs to gen_ai.*
+  # and forwards to Dynatrace.
+  # To use OpenPipeline instead (no Collector): comment out depends_on and change
+  # OTEL_EXPORTER_OTLP_ENDPOINT to ${DT_ENDPOINT}/api/v2/otlp
+  openinference:
+    build:
+      context: .
+      dockerfile: Dockerfile.openinference
+    ports:
+      - "8003:8000"
+    env_file: .env
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    depends_on:
+      - otel-collector
+
+  # ── OTel Collector (normalizes OpenInference attrs → gen_ai.*) ───────────────
+  # Not needed if using OpenPipeline for the openinference service.
+  otel-collector:
+    image: ghcr.io/dynatrace/dynatrace-otel-collector/dynatrace-otel-collector:latest
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/otel-collector-config.yaml:ro
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+    ports:
+      - "4318:4318"
