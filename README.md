@@ -1,221 +1,135 @@
-<<<<<<< HEAD
-# dt-ai-obs-test
-Testing the myriad of ways to instrument an AI Agent with Dynatrace 
-=======
 # Dynatrace AI Observability — Instrumentation Comparison
 
-Three minimal Python apps, each demonstrating a different instrumentation path to Dynatrace AI Observability. All three make the same OpenAI chat completion calls; only the instrumentation layer differs.
+Three FastAPI services, each demonstrating a different instrumentation path to Dynatrace AI Observability. All three expose the same `/ask` endpoint and make identical OpenAI chat completion calls — only the instrumentation layer differs.
 
-| File | Method | Requires OneAgent? | Requires code changes? | Requires OTel Collector? |
-|---|---|---|---|---|
-| `app_oneagent.py` | OneAgent (auto) | ✅ Yes | ❌ No | ❌ No |
-| `app_openllmetry.py` | OpenLLMetry SDK | ❌ No | ✅ Yes | ❌ No |
-| `app_openinference.py` | OpenInference SDK | ❌ No | ✅ Yes | Optional |
+| Service | Method | Port | Requires OneAgent? | Code changes? | OTel Collector? |
+|---|---|---|---|---|---|
+| `app_oneagent.py` | OneAgent (auto) | 8001 | ✅ Yes | ❌ No | ❌ No |
+| `app_openllmetry.py` | OpenLLMetry SDK | 8002 | ❌ No | ✅ Yes | ❌ No |
+| `app_openinference.py` | OpenInference SDK | 8003 | ❌ No | ✅ Yes | ✅ Yes (included) |
 
 ---
 
 ## Prerequisites
 
-- Python 3.9+
+- Docker + Docker Compose
 - OpenAI API key
 - Dynatrace SaaS tenant with a DPS license and Grail enabled
-- A Dynatrace API token — see scope requirements per method below
+- Dynatrace API token with scopes: `openTelemetryTrace.ingest`, `metrics.ingest`, `logs.ingest`
+- Dynatrace PaaS token (OneAgent only) — from **Settings → Integration → Platform as a Service**
 
 ---
 
-## 1. Common setup
+## Quick start
 
 ```bash
 cp .env.template .env
-# Fill in DT_ENDPOINT, DT_API_TOKEN, OPENAI_API_KEY, MODEL
+# Fill in all values in .env, then:
+
+docker compose up --build
 ```
+
+All four containers start: the three instrumented apps plus the OTel Collector (used by the OpenInference service). Once healthy, fire a test prompt at all three simultaneously:
+
+```bash
+./test_all.sh "What is observability?"
+
+# Or hit them individually:
+curl -s -X POST http://localhost:8001/ask -H "Content-Type: application/json" -d '{"prompt": "What is observability?"}' | python3 -m json.tool  # OneAgent
+curl -s -X POST http://localhost:8002/ask -H "Content-Type: application/json" -d '{"prompt": "What is observability?"}' | python3 -m json.tool  # OpenLLMetry
+curl -s -X POST http://localhost:8003/ask -H "Content-Type: application/json" -d '{"prompt": "What is observability?"}' | python3 -m json.tool  # OpenInference
+```
+
+Then check **AI Observability → Explorer** in your Dynatrace tenant to see data from all three.
 
 ---
 
-## 2. OneAgent
+## Per-method details
 
-### What it is
-Zero-code instrumentation. OneAgent intercepts Python OpenAI SDK calls at the process level and emits `gen_ai.*` spans automatically. No SDK or decorators required in your code.
+### OneAgent (port 8001)
 
-### Prerequisites
-- OneAgent installed on the host running the app
-- In Dynatrace: **Settings → Collect and capture → General monitoring settings → OneAgent features**, filter by "Python" and enable:
-  - **Python OpenAI** (required)
-  - **Python OpenAI prompt capture** (optional — captures prompt text)
-  - **Python FastAPI** (required — creates the HTTP entry-point span that LLM spans nest under)
+**What it is:** Zero-code instrumentation. OneAgent is downloaded and installed inside the container at startup via `docker-entrypoint-oneagent.sh`. It intercepts Python OpenAI SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
 
-### Setup
+**Required .env values:** `DT_ENDPOINT`, `DT_PAAS_TOKEN`
+
+**Required Dynatrace feature flags:** Before sending requests, enable these in **Settings → Collect and capture → General monitoring settings → OneAgent features**:
+- **Python OpenAI** (required)
+- **Python FastAPI** (required — creates the HTTP entry-point span LLM spans nest under)
+- **Python OpenAI prompt capture** (optional — captures prompt text)
+
+Then restart the container to pick up the new flags:
+```bash
+docker compose restart oneagent
+```
+
+**Validate in Dynatrace:**
+- **AI Observability → Explorer**: app appears as a service once the first request completes
+- **Distributed Tracing**: look for `POST /ask` span with a child `openai` span carrying `gen_ai.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+
+---
+
+### OpenLLMetry (port 8002)
+
+**What it is:** The `traceloop-sdk` wraps the OpenAI SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy.
+
+**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `OPENAI_API_KEY`
+
+**Validate in Dynatrace:**
+- **AI Observability → Explorer**: service `dt-ai-obs-openllmetry` appears after the first request
+- **Distributed Tracing**: search for trace name `ask_question` — you'll see a `workflow` span → `task` span → LLM span with `gen_ai.*` attributes
+- Span attributes to verify: `gen_ai.provider`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+
+---
+
+### OpenInference (port 8003)
+
+**What it is:** `openinference-instrumentation-openai` auto-instruments the OpenAI client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability expects `gen_ai.*` attributes, spans are routed through the OTel Collector (included in `docker-compose.yml`), which applies the transform before forwarding to Dynatrace.
+
+**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `OPENAI_API_KEY`
+
+**Validate in Dynatrace:**
+- **AI Observability → Explorer**: service `dt-ai-obs-openinference` appears after the first request
+- **Distributed Tracing**: verify `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present (these are the normalized attributes)
+- `ai.observability.source = openinference` confirms the OTel Collector transform ran
+
+**Alternative — OpenPipeline (no Collector):** If you'd rather not run the Collector, configure a pipeline in Dynatrace (Ctrl+K → **OpenPipeline** → **Spans**) using the attribute mappings in `otel-collector-config.yaml`, with routing matcher `isNotNull(openinference.span.kind)`. Then update `docker-compose.yml` to set `OTEL_EXPORTER_OTLP_ENDPOINT=${DT_ENDPOINT}/api/v2/otlp` and remove the `depends_on` and `otel-collector` service.
+
+---
+
+## Running without Docker
+
+Each app can also be run directly with Python:
 
 ```bash
+# OneAgent — requires OneAgent installed on the host
 pip install -r requirements_oneagent.txt
-```
+uvicorn app_oneagent:app --port 8001
 
-### Run
-
-```bash
-uvicorn app_oneagent:app --host 0.0.0.0 --port 8000
-```
-
-Then send test requests:
-
-```bash
-# Single request
-curl -s -X POST http://localhost:8000/ask \
-    -H "Content-Type: application/json" \
-    -d '{"prompt": "What is observability?"}'
-
-# Multiple requests to generate more signal
-for prompt in "What is observability?" "Explain distributed tracing." "What are LLM tokens?"; do
-  curl -s -X POST http://localhost:8000/ask \
-    -H "Content-Type: application/json" \
-    -d "{\"prompt\": \"$prompt\"}" | python3 -m json.tool
-done
-```
-
-### Validate in Dynatrace
-- **AI Observability → Explorer**: the app appears as a service named after its process once the first request completes
-- **Distributed Tracing**: look for an HTTP `POST /ask` span with an `openai` child span carrying `gen_ai.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
-- **Token scopes needed**: none (OneAgent pushes data via its own channel)
-
----
-
-## 3. OpenLLMetry
-
-### What it is
-The `traceloop-sdk` wraps the OpenAI SDK and exports spans and metrics via OTLP directly to Dynatrace. Decorators (`@workflow`, `@task`) define trace structure.
-
-### API token scopes required
-- `openTelemetryTrace.ingest`
-- `metrics.ingest`
-- `logs.ingest`
-
-### Setup
-
-```bash
+# OpenLLMetry
 pip install -r requirements_openllmetry.txt
-```
+uvicorn app_openllmetry:app --port 8002
 
-### Run
-
-```bash
-python app_openllmetry.py
-```
-
-You'll see output like:
-
-```
-Q: What is observability and why does it matter for AI systems?
-A: Observability means ...
-   [gpt-4o-mini | in=42 out=87]
-...
-✓ Done. Check AI Observability > Explorer in your Dynatrace tenant.
-```
-
-### Validate in Dynatrace
-- **AI Observability → Explorer**: service `dt-ai-obs-openllmetry` appears after the first run
-- **Distributed Tracing**: search for trace name `ask_question` — you'll see a workflow span → task spans → LLM span with `gen_ai.*` attributes
-- Span attributes to verify: `gen_ai.provider`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, temperature
-
----
-
-## 4. OpenInference
-
-### What it is
-`openinference-instrumentation-openai` auto-instruments the OpenAI client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability natively expects `gen_ai.*`, a normalization step is required.
-
-**Two normalization options — pick one:**
-
-| | Option A: OTel Collector | Option B: OpenPipeline |
-|---|---|---|
-| Where transforms run | Locally in Docker | Server-side in Dynatrace |
-| Requires Docker | Yes | No |
-| Requires Dynatrace config | No | Yes (one-time) |
-
-### API token scopes required
-- `openTelemetryTrace.ingest`
-
-### Setup
-
-```bash
+# OpenInference (with OTel Collector running separately on port 4318)
 pip install -r requirements_openinference.txt
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 uvicorn app_openinference:app --port 8003
 ```
-
----
-
-### Option A — OTel Collector (Docker)
-
-Start the Dynatrace OTel Collector with the provided config. It listens on port 4318, applies the transform, and forwards normalized spans to Dynatrace.
-
-```bash
-source .env  # or export DT_ENDPOINT and DT_API_TOKEN manually
-
-docker run -d --name otel-collector -p 4318:4318 \
-  -v $(pwd)/otel-collector-config.yaml:/etc/otelcol/otel-collector-config.yaml:ro \
-  -e DT_ENDPOINT=$DT_ENDPOINT \
-  -e DT_API_TOKEN=$DT_API_TOKEN \
-  ghcr.io/dynatrace/dynatrace-otel-collector/dynatrace-otel-collector:latest \
-  --config=/etc/otelcol/otel-collector-config.yaml
-
-# Tail collector logs to confirm it's running
-docker logs -f otel-collector
-```
-
-Run the app, pointing it at the local Collector (no Dynatrace credentials needed in the app):
-
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 python app_openinference.py
-```
-
-Stop the Collector when done:
-
-```bash
-docker stop otel-collector && docker rm otel-collector
-```
-
----
-
-### Option B — OpenPipeline (no Docker)
-
-One-time setup in Dynatrace:
-
-1. In Dynatrace, press `Ctrl+K` → search **OpenPipeline** → select **Spans**
-2. Click **Add pipeline** → name it `openinference-ai-spans`
-3. Add processors matching the attribute mappings in `otel-collector-config.yaml` (the same transforms, expressed as OpenPipeline DPL rules)
-4. Go to the **Routing** tab → Add entry:
-   - **Matcher:** `isNotNull(openinference.span.kind)`
-   - **Pipeline:** `openinference-ai-spans`
-
-Run the app directly against Dynatrace:
-
-```bash
-source .env
-OTEL_EXPORTER_OTLP_ENDPOINT=$DT_ENDPOINT/api/v2/otlp python app_openinference.py
-```
-
----
-
-### Validate in Dynatrace (both options)
-- **AI Observability → Explorer**: service `dt-ai-obs-openinference` appears after the first run
-- **Distributed Tracing**: find spans for `dt-ai-obs-openinference` — verify `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present (these are the normalized attributes)
-- Also check `ai.observability.source = openinference` is set on spans — this confirms normalization ran
-- **Before normalization** (raw): spans carry `llm.model_name`, `llm.token_count.prompt`, `llm.token_count.completion`
-- **After normalization**: those become `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 
 ---
 
 ## What to compare across all three
 
-Once all three are running and sending data, compare in Dynatrace:
+Once all three are running and sending data:
 
-- **Span structure**: OneAgent wraps under an HTTP span; OpenLLMetry creates workflow/task hierarchy; OpenInference creates flat LLM spans
-- **Attribute coverage**: all three should surface `gen_ai.request.model` and token counts; prompt capture requires explicit enablement (OneAgent feature flag or OpenInference `input.value`/`output.value`)
-- **Metrics**: OpenLLMetry emits `gen_ai.*` metrics (request count, token counts) as OTLP metrics; OneAgent and OpenInference send trace-derived metrics
+- **Span structure**: OneAgent nests LLM spans under an HTTP entry-point span; OpenLLMetry creates a `workflow → task → LLM` hierarchy; OpenInference creates flat LLM spans
+- **Attribute coverage**: all three surface `gen_ai.request.model` and token counts; prompt capture requires explicit opt-in (OneAgent feature flag; OpenInference captures `input.value`/`output.value` automatically)
+- **Metrics**: OpenLLMetry emits `gen_ai.*` OTLP metrics (request count, token totals); OneAgent and OpenInference derive metrics from traces
 - **Setup friction**: OneAgent = zero code changes; OpenLLMetry = ~10 lines + decorators; OpenInference = ~20 lines + normalization step
+
+---
 
 ## Reference
 
 - [OneAgent docs](https://docs.dynatrace.com/docs/observe/dynatrace-for-ai-observability/get-started/oneagent)
 - [OpenLLMetry docs](https://docs.dynatrace.com/docs/observe/dynatrace-for-ai-observability/get-started/openllmetry)
 - [OpenInference docs](https://docs.dynatrace.com/docs/observe/dynatrace-for-ai-observability/get-started/openinference)
-- [Dynatrace sample apps repo](https://github.com/dynatrace-oss/dynatrace-ai-agent-instrumentation-examples)
->>>>>>> 92f7fb6 (Initial commit: DT AI Observability instrumentation test apps)
+- [Dynatrace AI instrumentation examples](https://github.com/dynatrace-oss/dynatrace-ai-agent-instrumentation-examples)
