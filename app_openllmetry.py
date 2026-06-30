@@ -1,7 +1,7 @@
 """
 Dynatrace AI Observability — OpenLLMetry instrumentation test
 =============================================================
-Uses the traceloop-sdk to auto-instrument OpenAI and export
+Uses the traceloop-sdk to auto-instrument the Anthropic SDK and export
 spans + metrics directly to Dynatrace via OTLP.
 
 @workflow  — top-level trace entry (like a "request")
@@ -20,15 +20,15 @@ Test:
         -d '{"prompt": "What is observability?"}' | python3 -m json.tool
 
 Prerequisites in .env:
-    DT_ENDPOINT   — e.g. https://abc12345.live.dynatrace.com
-    DT_API_TOKEN  — scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest
-    OPENAI_API_KEY
-    MODEL         — e.g. gpt-4o-mini
+    DT_ENDPOINT      — e.g. https://abc12345.live.dynatrace.com
+    DT_API_TOKEN     — scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest
+    ANTHROPIC_API_KEY
+    MODEL            — e.g. claude-haiku-4-5-20251001
 """
 
 import os
 
-import openai
+import anthropic
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -43,7 +43,7 @@ os.environ["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "delta"
 
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
-MODEL = os.getenv("MODEL", "gpt-4o-mini")
+MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
 
 Traceloop.init(
     app_name="dt-ai-obs-openllmetry",
@@ -52,7 +52,7 @@ Traceloop.init(
     disable_batch=True,
 )
 
-client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 app = FastAPI(title="DT AI Obs — OpenLLMetry test")
 
 
@@ -71,23 +71,24 @@ class AskResponse(BaseModel):
 # ── Traceloop-instrumented building blocks ────────────────────────────────────
 
 @task(name="call_llm")
-def call_llm(messages: list[dict]) -> dict:
-    response = client.chat.completions.create(model=MODEL, messages=messages)
+def call_llm(prompt: str) -> dict:
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system="You are a concise technical assistant.",
+        messages=[{"role": "user", "content": prompt}],
+    )
     return {
-        "content": response.choices[0].message.content,
+        "content": response.content[0].text,
         "model": response.model,
-        "input_tokens": response.usage.prompt_tokens,
-        "output_tokens": response.usage.completion_tokens,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
     }
 
 
 @workflow(name="ask_question")
 def ask_question(prompt: str) -> dict:
-    messages = [
-        {"role": "system", "content": "You are a concise technical assistant."},
-        {"role": "user", "content": prompt},
-    ]
-    return call_llm(messages)
+    return call_llm(prompt)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────

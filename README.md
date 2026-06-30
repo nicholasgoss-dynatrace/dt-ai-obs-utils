@@ -13,7 +13,7 @@ Three FastAPI services, each demonstrating a different instrumentation path to D
 ## Prerequisites
 
 - Docker + Docker Compose
-- OpenAI API key
+- Anthropic API key — get one at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) and add it to `.env` only (never commit it)
 - Dynatrace SaaS tenant with a DPS license and Grail enabled
 - Dynatrace API token with scopes: `openTelemetryTrace.ingest`, `metrics.ingest`, `logs.ingest`
 - Dynatrace PaaS token (OneAgent only) — from **Settings → Integration → Platform as a Service**
@@ -24,7 +24,8 @@ Three FastAPI services, each demonstrating a different instrumentation path to D
 
 ```bash
 cp .env.template .env
-# Fill in all values in .env, then:
+# Fill in DT_ENDPOINT, DT_API_TOKEN, DT_PAAS_TOKEN, ANTHROPIC_API_KEY, MODEL
+# .env is gitignored — your API key will not be committed
 
 docker compose up --build
 ```
@@ -53,9 +54,8 @@ Then check **AI Observability → Explorer** in your Dynatrace tenant to see dat
 **Required .env values:** `DT_ENDPOINT`, `DT_PAAS_TOKEN`
 
 **Required Dynatrace feature flags:** Before sending requests, enable these in **Settings → Collect and capture → General monitoring settings → OneAgent features**:
-- **Python OpenAI** (required)
+- **Python Anthropic** (experimental sensor — required)
 - **Python FastAPI** (required — creates the HTTP entry-point span LLM spans nest under)
-- **Python OpenAI prompt capture** (optional — captures prompt text)
 
 Then restart the container to pick up the new flags:
 ```bash
@@ -72,7 +72,7 @@ docker compose restart oneagent
 
 **What it is:** The `traceloop-sdk` wraps the OpenAI SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy.
 
-**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `OPENAI_API_KEY`
+**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `ANTHROPIC_API_KEY`
 
 **Validate in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openllmetry` appears after the first request
@@ -83,9 +83,9 @@ docker compose restart oneagent
 
 ### OpenInference (port 8003)
 
-**What it is:** `openinference-instrumentation-openai` auto-instruments the OpenAI client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability expects `gen_ai.*` attributes, spans are routed through the OTel Collector (included in `docker-compose.yml`), which applies the transform before forwarding to Dynatrace.
+**What it is:** `openinference-instrumentation-anthropic` auto-instruments the Anthropic client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability expects `gen_ai.*` attributes, spans are routed through the OTel Collector (included in `docker-compose.yml`), which applies the transform before forwarding to Dynatrace.
 
-**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `OPENAI_API_KEY`
+**Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `ANTHROPIC_API_KEY`
 
 **Validate in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openinference` appears after the first request

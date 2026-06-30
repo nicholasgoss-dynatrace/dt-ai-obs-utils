@@ -1,7 +1,7 @@
 """
 Dynatrace AI Observability — OpenInference instrumentation test
 ===============================================================
-Uses openinference-instrumentation-openai to auto-instrument the OpenAI SDK.
+Uses openinference-instrumentation-anthropic to auto-instrument the Anthropic SDK.
 OpenInference uses its own attribute conventions (llm.model_name,
 llm.token_count.*, etc.), so a normalization step is required before Dynatrace
 AI Observability can understand the data.
@@ -29,18 +29,18 @@ Prerequisites in .env:
     DT_ENDPOINT                  — e.g. https://abc12345.live.dynatrace.com
     DT_API_TOKEN                 — scope: openTelemetryTrace.ingest
     OTEL_EXPORTER_OTLP_ENDPOINT  — Collector URL or DT OTLP endpoint
-    OPENAI_API_KEY
-    MODEL                        — e.g. gpt-4o-mini
+    ANTHROPIC_API_KEY
+    MODEL                        — e.g. claude-haiku-4-5-20251001
 """
 
 import os
 from contextlib import asynccontextmanager
 
-import openai
+import anthropic
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from openinference.instrumentation.openai import OpenAIInstrumentor
+from openinference.instrumentation.anthropic import AnthropicInstrumentor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -51,7 +51,7 @@ load_dotenv()
 
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
-MODEL = os.getenv("MODEL", "gpt-4o-mini")
+MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
 SERVICE = os.getenv("OTEL_SERVICE_NAME", "dt-ai-obs-openinference")
 
 otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -72,10 +72,10 @@ exporter = OTLPSpanExporter(
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 
-# Instrument the OpenAI client — patches all openai.* calls automatically
-OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+# Instrument the Anthropic client — patches all anthropic.* calls automatically
+AnthropicInstrumentor().instrument(tracer_provider=tracer_provider)
 
-client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
@@ -83,7 +83,6 @@ client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    # Flush remaining spans on shutdown
     tracer_provider.shutdown()
 
 
@@ -106,19 +105,18 @@ class AskResponse(BaseModel):
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    """OpenInference auto-records the LLM span when the OpenAI client is called."""
-    response = client.chat.completions.create(
+    """AnthropicInstrumentor auto-records the LLM span on every client call."""
+    response = client.messages.create(
         model=MODEL,
-        messages=[
-            {"role": "system", "content": "You are a concise technical assistant."},
-            {"role": "user", "content": req.prompt},
-        ],
+        max_tokens=1024,
+        system="You are a concise technical assistant.",
+        messages=[{"role": "user", "content": req.prompt}],
     )
     return AskResponse(
-        result=response.choices[0].message.content,
+        result=response.content[0].text,
         model=response.model,
-        input_tokens=response.usage.prompt_tokens,
-        output_tokens=response.usage.completion_tokens,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
     )
 
 
