@@ -51,7 +51,7 @@ cp .env.template .env
 ./start.sh --build   # after code changes (rebuilds containers)
 ```
 
-`start.sh` runs `app_oneagent.py` natively on the host (so host-level OneAgent can instrument it) and starts OpenLLMetry, OpenInference, and the OTel Collector via podman-compose. No sudo required.
+`start.sh` starts all services via podman-compose (oneagent, openllmetry, openinference, and the OTel Collector). No sudo required.
 
 Once running, fire the full prompt quality test across all three services simultaneously:
 
@@ -73,7 +73,7 @@ curl -s -X POST http://localhost:8001/ask \
   -d '{"prompt": "What is observability?"}' | python3 -m json.tool
 ```
 
-Ports: `8001` = OneAgent (native) · `8002` = OpenLLMetry · `8003` = OpenInference
+Ports: `8001` = OneAgent · `8002` = OpenLLMetry · `8003` = OpenInference
 
 To stop everything:
 
@@ -87,44 +87,53 @@ To stop everything:
 
 ### 🔵 OneAgent (port 8001)
 
-**How it works:** Zero code changes. OneAgent intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
+**How it works:** Zero code changes. OneAgent intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`. The app runs in a Podman container; the host OneAgent detects it via cgroup metadata and injects the Python sensor via ptrace.
 
-> **⚠️ Container limitation:** OneAgent 1.341+ blocks installation inside a container by policy. The app container starts cleanly but instrumentation requires OneAgent on the host machine. Follow the host setup steps below.
+#### Host Setup (required — one-time)
 
-#### Host Installation (required for instrumentation)
-
-**Step 1 — Install OneAgent on your machine**
-
-Download and run the OneAgent installer from your Dynatrace tenant:
+**Step 1 — Install OneAgent on your host machine**
 
 1. In Dynatrace, go to **Hub → OneAgent** (or Ctrl+K → "Deploy OneAgent")
-2. Select your OS, copy the install command, and run it — it includes your PaaS token automatically
-3. Verify installation: `systemctl status oneagent` (Linux) or check the Dynatrace tray icon (macOS)
+2. Select your OS, copy the install command, run it — it includes your PaaS token automatically
+3. Verify: `systemctl status oneagent` (Linux) or check the Dynatrace tray icon (macOS)
 
-**Step 2 — Enable required feature flags**
+> **Fedora / RHEL note:** On some distros the installer sets `liboneagentproc.so` without an execute bit, silently breaking injection. `start.sh` detects and fixes this automatically with `sudo chmod 755`.
+
+**Step 2 — Enable Podman container injection**
+
+By default, OneAgent does not inject into Podman containers. Enable it once per tenant:
+
+In **Settings → Infrastructure monitoring → Container monitoring**, enable **Podman** container monitoring.
+
+Without this, every injection attempt logs `Container injection failed` even when ptrace permissions are fine.
+
+**Step 3 — Enable required Python feature flags**
 
 In **Settings → Collect and capture → General monitoring settings → OneAgent features**, enable:
 - **Python Anthropic** *(experimental sensor — required)*
 - **Python FastAPI** *(required — creates the HTTP entry-point span that LLM spans nest under)*
 
-Restart OneAgent after enabling flags:
+Restart OneAgent after enabling:
 ```bash
 # Linux
 sudo systemctl restart oneagent
-
-# macOS
-# Restart via the Dynatrace tray icon, or:
-sudo /opt/dynatrace/oneagent/agent/lib64/oneagentctl --restart-service
 ```
 
-**Step 3 — Run the app**
+**Step 4 — Add container injection exclusions**
 
-The container (`podman-compose up`) will start `app_oneagent.py` and host OneAgent will automatically detect and instrument the Python process. Or run it directly:
+Because OneAgent injects into any detected container, it will also attempt to inject into the OpenLLMetry and OpenInference containers — which already have OTLP instrumentation and don't need it. Exclude them to avoid duplicate service entities.
+
+In **Settings → Processes and containers → Container monitoring → Container injection rules**, add two exclusion rules:
+- Exclude containers where `Image name` **contains** `openllmetry`
+- Exclude containers where `Image name` **contains** `openinference`
+
+**Step 5 — Avoid port conflicts with rootful Podman containers**
+
+If you previously ran `sudo podman run` to test container injection, a root-owned container may still hold port 8001. The rootless `podman-compose` container cannot start until it is removed:
 
 ```bash
-source .env
-pip install -r requirements_oneagent.txt
-uvicorn app_oneagent:app --port 8001
+sudo podman stop dt-ai-obs-test_oneagent_1
+sudo podman rm dt-ai-obs-test_oneagent_1
 ```
 
 **What to look for in Dynatrace:**
@@ -186,7 +195,8 @@ Each app can also be run directly. Copy `.env.template` to `.env`, fill in your 
 # Load env vars
 source .env
 
-# OneAgent — host-level OneAgent must be installed and running (see OneAgent setup above)
+# OneAgent — host-level OneAgent must be installed, Podman injection enabled,
+#            and the exclusion rules added (see OneAgent setup above)
 pip install -r requirements_oneagent.txt
 uvicorn app_oneagent:app --port 8001
 
