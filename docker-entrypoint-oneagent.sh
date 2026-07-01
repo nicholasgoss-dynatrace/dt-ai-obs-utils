@@ -7,6 +7,7 @@
 #   DT_PAAS_TOKEN  — PaaS token from Settings > Integration > Platform as a Service
 #
 # Optional env vars:
+#   HOST_GROUP          — OneAgent host group (default: dt-ai-obs-test)
 #   DT_CONNECTION_POINT — override the connection endpoint (default: auto-detected)
 
 set -e
@@ -18,10 +19,11 @@ if [ -n "$DT_PAAS_TOKEN" ] && [ -n "$DT_ENDPOINT" ]; then
         --header="Authorization: Api-Token ${DT_PAAS_TOKEN}"
 
     echo "[OneAgent] Installing..."
+    HOST_GROUP="${HOST_GROUP:-dt-ai-obs-test}"
     sh /tmp/oneagent.sh \
         --set-app-log-content-access=true \
         --set-infra-only=false \
-        --set-host-group=dt-ai-obs-test
+        --set-host-group="${HOST_GROUP}"
     rm /tmp/oneagent.sh
 
     echo "[OneAgent] Installation complete. Starting app..."

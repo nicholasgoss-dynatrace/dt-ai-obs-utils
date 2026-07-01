@@ -52,7 +52,7 @@ load_dotenv()
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
 MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
-SERVICE = os.getenv("OTEL_SERVICE_NAME", "dt-ai-obs-openinference")
+SERVICE = os.getenv("SERVICE_NAME", os.getenv("OTEL_SERVICE_NAME", "dt-ai-obs-openinference"))
 
 otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 if not otlp_endpoint:

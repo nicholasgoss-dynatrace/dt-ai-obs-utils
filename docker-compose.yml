@@ -14,6 +14,7 @@ services:
     env_file: .env
     environment:
       - DT_PAAS_TOKEN=${DT_PAAS_TOKEN}
+      - HOST_GROUP=${HOST_GROUP:-dt-ai-obs-test}
 
   # ── OpenLLMetry (traceloop-sdk, sends OTLP directly to Dynatrace) ───────────
   # Port: http://localhost:8002/ask
@@ -24,6 +25,8 @@ services:
     ports:
       - "8002:8000"
     env_file: .env
+    environment:
+      - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-openllmetry}
 
   # ── OpenInference (openinference-instrumentation-openai + OTel Collector) ───
   # Port: http://localhost:8003/ask
@@ -40,6 +43,7 @@ services:
     env_file: .env
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-openinference}
     depends_on:
       - otel-collector
 

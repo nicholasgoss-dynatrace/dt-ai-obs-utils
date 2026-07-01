@@ -44,9 +44,10 @@ os.environ["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "delta"
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
 MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "dt-ai-obs-openllmetry")
 
 Traceloop.init(
-    app_name="dt-ai-obs-openllmetry",
+    app_name=SERVICE_NAME,
     api_endpoint=f"{DT_ENDPOINT}/api/v2/otlp",
     headers={"Authorization": f"Api-Token {DT_API_TOKEN}"},
     disable_batch=True,
