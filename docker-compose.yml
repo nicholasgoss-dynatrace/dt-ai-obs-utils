@@ -27,6 +27,7 @@ services:
     env_file: .env
     environment:
       - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-openllmetry}
+      - TRACELOOP_TRACE_CONTENT=true
 
   # ── OpenInference (openinference-instrumentation-openai + OTel Collector) ───
   # Port: http://localhost:8003/ask

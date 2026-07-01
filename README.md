@@ -78,20 +78,17 @@ Ports: `8001` = OneAgent · `8002` = OpenLLMetry · `8003` = OpenInference
 
 ### 🔵 OneAgent (port 8001)
 
-**How it works:** Zero code changes. OneAgent is downloaded and installed inside the container at startup via `docker-entrypoint-oneagent.sh`. It intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically.
+**How it works:** Zero code changes. OneAgent intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
 
-> **Note:** OneAgent has no ARM Linux build. On Apple Silicon the service runs as `linux/amd64` under Rosetta emulation — handled automatically via `docker-compose.yml`.
+> **⚠️ Container limitation:** OneAgent 1.341+ blocks installation inside a container by policy. For containerized testing, run `app_oneagent.py` directly on your host machine (see [Running Without Containers](#running-without-containers)) with OneAgent installed at the host level. OneAgent installed on the host automatically monitors all processes, including those inside containers.
+
+> **Apple Silicon note:** If running the container, OneAgent has no ARM Linux build — `docker-compose.yml` sets `platform: linux/amd64` to run via Rosetta. This is moot if using the host approach.
 
 **Required `.env` values:** `DT_ENDPOINT`, `DT_PAAS_TOKEN`
 
 **Required Dynatrace feature flags** — enable in **Settings → Collect and capture → General monitoring settings → OneAgent features** before sending requests:
 - **Python Anthropic** *(experimental sensor — required)*
 - **Python FastAPI** *(required — creates the HTTP entry-point span that LLM spans nest under)*
-
-Then restart the container to pick up the new flags:
-```bash
-podman-compose restart oneagent
-```
 
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service appears after the first request

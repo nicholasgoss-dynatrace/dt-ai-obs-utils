@@ -51,7 +51,6 @@ Traceloop.init(
     api_endpoint=f"{DT_ENDPOINT}/api/v2/otlp",
     headers={"Authorization": f"Api-Token {DT_API_TOKEN}"},
     disable_batch=True,
-    suppress_content_tracing=False,  # capture prompt + completion text for AI Observability quality analysis
 )
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
