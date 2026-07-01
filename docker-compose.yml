@@ -2,8 +2,10 @@ services:
 
   # ── OneAgent (auto-instrumentation, zero code changes) ──────────────────────
   # Port: http://localhost:8001/ask
-  # Requires DT_PAAS_TOKEN in .env to download + install OneAgent at startup.
-  # Get a PaaS token from: Settings > Integration > Platform as a Service
+  # Host-level OneAgent instruments this container via LD_PRELOAD code-module injection.
+  # The OneAgent libraries and IPC socket are mounted from the host so liboneagentproc.so
+  # can register with the host agent without requiring ptrace across namespace boundaries
+  # (which fails for rootless Podman). No PaaS token needed — OneAgent is already on the host.
   oneagent:
     build:
       context: .
@@ -12,6 +14,15 @@ services:
     ports:
       - "8001:8000"
     env_file: .env
+    environment:
+      - LD_PRELOAD=/usr/lib64/liboneagentproc.so
+    volumes:
+      # Preload library — must match what's in /etc/ld.so.preload on the host
+      - /usr/lib64/liboneagentproc.so:/usr/lib64/liboneagentproc.so:ro
+      # IPC socket — liboneagentproc.so connects here to register with the host agent
+      - /var/lib/dynatrace/oneagent/agent/config:/var/lib/dynatrace/oneagent/agent/config
+      # Agent binaries — host agent uses these to push liboneagentpython.so into the process
+      - /opt/dynatrace/oneagent/agent/bin:/opt/dynatrace/oneagent/agent/bin:ro
 
   # ── OpenLLMetry (traceloop-sdk, sends OTLP directly to Dynatrace) ───────────
   # Port: http://localhost:8002/ask
