@@ -45,13 +45,15 @@ podman info   # verify
 # 1. Copy and fill in your credentials
 cp .env.template .env
 #    Set: DT_ENDPOINT, DT_API_TOKEN, ANTHROPIC_API_KEY, MODEL
-#    DT_PAAS_TOKEN is only needed if installing OneAgent on the host manually
 
-# 2. Build and start all four containers
-podman-compose up --build
+# 2. Start all services
+./start.sh           # first run
+./start.sh --build   # after code changes (rebuilds containers)
 ```
 
-Once healthy, run the full prompt quality test across all three services simultaneously:
+`start.sh` runs `app_oneagent.py` natively on the host (so host-level OneAgent can instrument it) and starts OpenLLMetry, OpenInference, and the OTel Collector via podman-compose. No sudo required.
+
+Once running, fire the full prompt quality test across all three services simultaneously:
 
 ```bash
 ./test_all.sh
@@ -71,7 +73,13 @@ curl -s -X POST http://localhost:8001/ask \
   -d '{"prompt": "What is observability?"}' | python3 -m json.tool
 ```
 
-Ports: `8001` = OneAgent · `8002` = OpenLLMetry · `8003` = OpenInference
+Ports: `8001` = OneAgent (native) · `8002` = OpenLLMetry · `8003` = OpenInference
+
+To stop everything:
+
+```bash
+./stop.sh
+```
 
 ---
 

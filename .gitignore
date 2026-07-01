@@ -4,3 +4,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+.venv-oneagent/
+.oneagent.pid
+.oneagent.log
+*.tar.gz
