@@ -60,6 +60,12 @@ if not otlp_endpoint:
     print(f"[INFO] OTEL_EXPORTER_OTLP_ENDPOINT not set; defaulting to {otlp_endpoint}")
     print("[INFO] Ensure OpenPipeline is configured, or set the env var to http://localhost:4318 for OTel Collector mode.")
 
+# OTLPSpanExporter uses the endpoint as-is when passed explicitly — always include /v1/traces.
+# Works for both OTel Collector (http://host:4318/v1/traces) and
+# Dynatrace direct (https://env.live.dynatrace.com/api/v2/otlp/v1/traces).
+if not otlp_endpoint.endswith("/v1/traces"):
+    otlp_endpoint = otlp_endpoint.rstrip("/") + "/v1/traces"
+
 # ── OTel provider setup ────────────────────────────────────────────────────────
 
 tracer_provider = TracerProvider(
