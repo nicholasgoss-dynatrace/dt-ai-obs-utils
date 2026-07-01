@@ -1,6 +1,6 @@
 # Dynatrace AI Observability — Instrumentation Comparison
 
-Three FastAPI services, each demonstrating a different instrumentation path to Dynatrace AI Observability. All three expose the same `/ask` endpoint and make identical OpenAI chat completion calls — only the instrumentation layer differs.
+Three FastAPI services, each demonstrating a different instrumentation path to Dynatrace AI Observability. All three expose the same `/ask` endpoint and make identical Anthropic Claude API calls — only the instrumentation layer differs.
 
 | Service | Method | Port | Requires OneAgent? | Code changes? | OTel Collector? |
 |---|---|---|---|---|---|
@@ -12,11 +12,26 @@ Three FastAPI services, each demonstrating a different instrumentation path to D
 
 ## Prerequisites
 
-- Docker + Docker Compose
+- Podman + podman-compose (see setup below)
 - Anthropic API key — get one at [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) and add it to `.env` only (never commit it)
 - Dynatrace SaaS tenant with a DPS license and Grail enabled
 - Dynatrace API token with scopes: `openTelemetryTrace.ingest`, `metrics.ingest`, `logs.ingest`
 - Dynatrace PaaS token (OneAgent only) — from **Settings → Integration → Platform as a Service**
+
+---
+
+## Podman setup (first time only)
+
+```bash
+brew install podman podman-compose
+
+# Initialize and start the Podman Linux VM
+podman machine init
+podman machine start
+
+# Verify
+podman info
+```
 
 ---
 
@@ -27,7 +42,7 @@ cp .env.template .env
 # Fill in DT_ENDPOINT, DT_API_TOKEN, DT_PAAS_TOKEN, ANTHROPIC_API_KEY, MODEL
 # .env is gitignored — your API key will not be committed
 
-docker compose up --build
+podman-compose up --build
 ```
 
 All four containers start: the three instrumented apps plus the OTel Collector (used by the OpenInference service). Once healthy, fire a test prompt at all three simultaneously:
@@ -49,7 +64,9 @@ Then check **AI Observability → Explorer** in your Dynatrace tenant to see dat
 
 ### OneAgent (port 8001)
 
-**What it is:** Zero-code instrumentation. OneAgent is downloaded and installed inside the container at startup via `docker-entrypoint-oneagent.sh`. It intercepts Python OpenAI SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
+**What it is:** Zero-code instrumentation. OneAgent is downloaded and installed inside the container at startup via `docker-entrypoint-oneagent.sh`. It intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
+
+> **Note:** OneAgent has no ARM Linux build. The service runs as `linux/amd64` under Rosetta emulation on Apple Silicon — this is handled automatically via the `platform` setting in `docker-compose.yml`.
 
 **Required .env values:** `DT_ENDPOINT`, `DT_PAAS_TOKEN`
 
@@ -59,18 +76,18 @@ Then check **AI Observability → Explorer** in your Dynatrace tenant to see dat
 
 Then restart the container to pick up the new flags:
 ```bash
-docker compose restart oneagent
+podman-compose restart oneagent
 ```
 
 **Validate in Dynatrace:**
 - **AI Observability → Explorer**: app appears as a service once the first request completes
-- **Distributed Tracing**: look for `POST /ask` span with a child `openai` span carrying `gen_ai.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+- **Distributed Tracing**: look for `POST /ask` span with a child `anthropic` span carrying `gen_ai.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 
 ---
 
 ### OpenLLMetry (port 8002)
 
-**What it is:** The `traceloop-sdk` wraps the OpenAI SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy.
+**What it is:** The `traceloop-sdk` wraps the Anthropic SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy.
 
 **Required .env values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `ANTHROPIC_API_KEY`
 
@@ -96,7 +113,7 @@ docker compose restart oneagent
 
 ---
 
-## Running without Docker
+## Running without containers
 
 Each app can also be run directly with Python:
 

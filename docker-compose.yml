@@ -8,6 +8,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.oneagent
+    platform: linux/amd64   # OneAgent has no ARM Linux build; runs via Rosetta on Apple Silicon
     ports:
       - "8001:8000"
     env_file: .env
@@ -47,7 +48,7 @@ services:
   otel-collector:
     image: ghcr.io/dynatrace/dynatrace-otel-collector/dynatrace-otel-collector:latest
     volumes:
-      - ./otel-collector-config.yaml:/etc/otelcol/otel-collector-config.yaml:ro
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
     environment:
       - DT_ENDPOINT=${DT_ENDPOINT}
       - DT_API_TOKEN=${DT_API_TOKEN}

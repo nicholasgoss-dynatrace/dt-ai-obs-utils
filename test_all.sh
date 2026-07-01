@@ -6,7 +6,7 @@
 #   ./test_all.sh
 #   ./test_all.sh "Your custom prompt here"
 #
-# Requires: docker compose up (all services healthy)
+# Requires: podman-compose up (all services healthy)
 
 PROMPT="${1:-What is observability, and why does it matter for AI systems?}"
 
