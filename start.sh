@@ -50,10 +50,22 @@ if [ -f "${PID_FILE}" ]; then
     rm -f "${PID_FILE}"
 fi
 
-# Create virtualenv if needed
+# Create virtualenv if needed.
+# OneAgent's Python sensor requires Python 3.11 or earlier — use it explicitly.
 if [ ! -d "${VENV_DIR}" ]; then
     echo "        Creating virtual environment..."
-    python3 -m venv "${VENV_DIR}"
+    if command -v python3.11 &>/dev/null; then
+        python3.11 -m venv "${VENV_DIR}"
+    else
+        echo ""
+        echo "  WARNING: python3.11 not found. Falling back to $(python3 --version)."
+        echo "  OneAgent's Python sensor may not support this version."
+        echo "  Install Python 3.11 for guaranteed instrumentation:"
+        echo "    Fedora/RHEL:  sudo dnf install python3.11"
+        echo "    Debian/Ubuntu: sudo apt install python3.11"
+        echo ""
+        python3 -m venv "${VENV_DIR}"
+    fi
 fi
 
 # Install/update requirements
