@@ -16,6 +16,7 @@ services:
     env_file: .env
     environment:
       - LD_PRELOAD=/usr/lib64/liboneagentproc.so
+      - CONTAINER_NAME=dt-ai-obs-test_oneagent_1  # triggers OneAgent injection rule -41
     volumes:
       # Preload library — must match what's in /etc/ld.so.preload on the host
       - /usr/lib64/liboneagentproc.so:/usr/lib64/liboneagentproc.so:ro
