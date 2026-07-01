@@ -22,7 +22,7 @@ This project provides three identical FastAPI services, each calling the Anthrop
 - **Anthropic API key** — obtain from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys); add to `.env` only, never commit it
 - **Dynatrace SaaS tenant** with a DPS license and Grail enabled
 - **Dynatrace API token** with scopes: `openTelemetryTrace.ingest`, `metrics.ingest`, `logs.ingest`
-- **Dynatrace PaaS token** (OneAgent only) — from **Settings → Integration → Platform as a Service**
+- **Dynatrace PaaS token** (OneAgent host install only) — from **Settings → Integration → Platform as a Service**
 
 ---
 
@@ -44,7 +44,8 @@ podman info   # verify
 ```bash
 # 1. Copy and fill in your credentials
 cp .env.template .env
-#    Set: DT_ENDPOINT, DT_API_TOKEN, DT_PAAS_TOKEN, ANTHROPIC_API_KEY, MODEL
+#    Set: DT_ENDPOINT, DT_API_TOKEN, ANTHROPIC_API_KEY, MODEL
+#    DT_PAAS_TOKEN is only needed if installing OneAgent on the host manually
 
 # 2. Build and start all four containers
 podman-compose up --build
@@ -80,19 +81,47 @@ Ports: `8001` = OneAgent · `8002` = OpenLLMetry · `8003` = OpenInference
 
 **How it works:** Zero code changes. OneAgent intercepts Anthropic SDK calls at the process level and emits `gen_ai.*` spans automatically — no SDK imports or decorators required in `app_oneagent.py`.
 
-> **⚠️ Container limitation:** OneAgent 1.341+ blocks installation inside a container by policy. For containerized testing, run `app_oneagent.py` directly on your host machine (see [Running Without Containers](#running-without-containers)) with OneAgent installed at the host level. OneAgent installed on the host automatically monitors all processes, including those inside containers.
+> **⚠️ Container limitation:** OneAgent 1.341+ blocks installation inside a container by policy. The app container starts cleanly but instrumentation requires OneAgent on the host machine. Follow the host setup steps below.
 
-> **Apple Silicon note:** If running the container, OneAgent has no ARM Linux build — `docker-compose.yml` sets `platform: linux/amd64` to run via Rosetta. This is moot if using the host approach.
+#### Host Installation (required for instrumentation)
 
-**Required `.env` values:** `DT_ENDPOINT`, `DT_PAAS_TOKEN`
+**Step 1 — Install OneAgent on your machine**
 
-**Required Dynatrace feature flags** — enable in **Settings → Collect and capture → General monitoring settings → OneAgent features** before sending requests:
+Download and run the OneAgent installer from your Dynatrace tenant:
+
+1. In Dynatrace, go to **Hub → OneAgent** (or Ctrl+K → "Deploy OneAgent")
+2. Select your OS, copy the install command, and run it — it includes your PaaS token automatically
+3. Verify installation: `systemctl status oneagent` (Linux) or check the Dynatrace tray icon (macOS)
+
+**Step 2 — Enable required feature flags**
+
+In **Settings → Collect and capture → General monitoring settings → OneAgent features**, enable:
 - **Python Anthropic** *(experimental sensor — required)*
 - **Python FastAPI** *(required — creates the HTTP entry-point span that LLM spans nest under)*
 
+Restart OneAgent after enabling flags:
+```bash
+# Linux
+sudo systemctl restart oneagent
+
+# macOS
+# Restart via the Dynatrace tray icon, or:
+sudo /opt/dynatrace/oneagent/agent/lib64/oneagentctl --restart-service
+```
+
+**Step 3 — Run the app**
+
+The container (`podman-compose up`) will start `app_oneagent.py` and host OneAgent will automatically detect and instrument the Python process. Or run it directly:
+
+```bash
+source .env
+pip install -r requirements_oneagent.txt
+uvicorn app_oneagent:app --port 8001
+```
+
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service appears after the first request
-- **Distributed Tracing**: `POST /ask` span with a child `anthropic` span carrying `gen_ai.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+- **Distributed Tracing**: `POST /ask` span with a child `anthropic` span carrying `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
 
 ---
 
@@ -143,10 +172,13 @@ The test script's prompt quality tiers (poor / mediocre / excellent) are designe
 
 ## Running Without Containers
 
-Each app can also be run directly:
+Each app can also be run directly. Copy `.env.template` to `.env`, fill in your values, then:
 
 ```bash
-# OneAgent — requires OneAgent installed on the host
+# Load env vars
+source .env
+
+# OneAgent — host-level OneAgent must be installed and running (see OneAgent setup above)
 pip install -r requirements_oneagent.txt
 uvicorn app_oneagent:app --port 8001
 
