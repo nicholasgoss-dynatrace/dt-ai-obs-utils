@@ -36,6 +36,21 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  Dynatrace AI Observability — starting all services"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# ── OneAgent preload library permission check ─────────────────────────────────
+# On some Linux distributions (e.g. Fedora 44), the OneAgent installer sets
+# liboneagentproc.so without an execute bit, causing ld.so.preload to silently
+# skip it. Detect and fix this automatically.
+PRELOAD_LIB="/lib64/liboneagentproc.so"
+if [ ! -f "${PRELOAD_LIB}" ]; then
+    PRELOAD_LIB="/usr/lib64/liboneagentproc.so"
+fi
+if [ -f "${PRELOAD_LIB}" ] && [ ! -x "${PRELOAD_LIB}" ]; then
+    echo ""
+    echo "  ⚠️  OneAgent preload library missing execute bit — fixing with sudo..."
+    sudo chmod 755 "${PRELOAD_LIB}"
+    echo "     Fixed: ${PRELOAD_LIB}"
+fi
+
 # ── OneAgent app (native) ─────────────────────────────────────────────────────
 echo ""
 echo "  [1/2] OneAgent app — running natively on port 8001"
