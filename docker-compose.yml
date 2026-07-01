@@ -12,9 +12,6 @@ services:
     ports:
       - "8001:8000"
     env_file: .env
-    environment:
-      - DT_PAAS_TOKEN=${DT_PAAS_TOKEN}
-      - HOST_GROUP=${HOST_GROUP:-dt-ai-obs-test}
 
   # ── OpenLLMetry (traceloop-sdk, sends OTLP directly to Dynatrace) ───────────
   # Port: http://localhost:8002/ask
