@@ -44,7 +44,9 @@ processors:
           # ── provider ───────────────────────────────────────────────────────
           - set(attributes["gen_ai.provider.name"], attributes["llm.provider"]) where attributes["llm.provider"] != nil
           - set(attributes["gen_ai.provider.name"], attributes["llm.system"])   where attributes["llm.system"] != nil and attributes["llm.provider"] == nil
-          - set(attributes["gen_ai.system"], "azure.ai.openai")                 where attributes["gen_ai.provider.name"] == "azure"
+          - set(attributes["gen_ai.system"], "azure.ai.openai") where attributes["gen_ai.provider.name"] == "azure"
+          - set(attributes["gen_ai.system"], "anthropic")       where attributes["gen_ai.provider.name"] == "Anthropic"
+          - set(attributes["gen_ai.system"], "anthropic")       where attributes["gen_ai.provider.name"] == "anthropic"
 
           # ── operation name ─────────────────────────────────────────────────
           - set(attributes["gen_ai.operation.name"], "chat")       where attributes["llm.model_name"] != nil
