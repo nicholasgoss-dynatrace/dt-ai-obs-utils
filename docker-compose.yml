@@ -17,6 +17,7 @@ services:
     environment:
       - LD_PRELOAD=/usr/lib64/liboneagentproc.so
       - CONTAINER_NAME=dt-ai-obs-test_oneagent_1  # triggers OneAgent injection rule -41
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
     volumes:
       # Preload library — must match what's in /etc/ld.so.preload on the host
       - /usr/lib64/liboneagentproc.so:/usr/lib64/liboneagentproc.so:ro
@@ -37,6 +38,7 @@ services:
     environment:
       - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-openllmetry}
       - TRACELOOP_TRACE_CONTENT=true
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
 
   # ── OpenInference (openinference-instrumentation-openai + OTel Collector) ───
   # Port: http://localhost:8003/ask
@@ -54,6 +56,7 @@ services:
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
       - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-openinference}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
     depends_on:
       - otel-collector
 

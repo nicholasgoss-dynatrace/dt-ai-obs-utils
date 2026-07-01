@@ -6,6 +6,7 @@ COPY requirements_openinference.txt .
 RUN pip install --no-cache-dir -r requirements_openinference.txt
 
 COPY app_openinference.py .
+COPY llm_client.py .
 
 EXPOSE 8000
 

@@ -6,6 +6,7 @@ COPY requirements_openllmetry.txt .
 RUN pip install --no-cache-dir -r requirements_openllmetry.txt
 
 COPY app_openllmetry.py .
+COPY llm_client.py .
 
 EXPOSE 8000
 

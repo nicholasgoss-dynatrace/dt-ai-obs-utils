@@ -1,3 +1,74 @@
+# Release Notes — v0.1.2
+
+**Date:** 2026-07-01
+**License:** Apache 2.0
+
+---
+
+## Overview
+
+The three instrumented apps are now LLM provider agnostic. A new shared `llm_client.py` module abstracts provider selection, client initialization, and response normalization. Switching between Anthropic and OpenAI requires only a one-line change in `.env` — no application code changes.
+
+---
+
+## What's New
+
+### LLM provider abstraction (`llm_client.py`)
+
+New shared module used by all three apps:
+
+- `PROVIDER` — reads `LLM_PROVIDER` env var (default: `anthropic`)
+- `create_client()` — returns the native SDK client for the configured provider
+- `call_llm()` — calls the provider and returns a normalized `LLMResponse` (content, model, input_tokens, output_tokens)
+- `default_model()` — returns the provider's recommended evaluation model if `MODEL` is unset (`claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI)
+
+### OpenAI support
+
+All three instrumentation paths now work with OpenAI:
+
+- **OneAgent** — enable the **Python OpenAI** feature flag in Settings → OneAgent features; zero app code changes
+- **OpenLLMetry** — `traceloop-sdk` auto-instruments whichever SDK is active; no code changes needed
+- **OpenInference** — `OpenAIInstrumentor` is selected automatically when `LLM_PROVIDER=openai`
+
+### API response includes `provider` field
+
+All `/ask` and `/health` responses now include `"provider": "anthropic"` or `"provider": "openai"` for easy verification.
+
+---
+
+## Changes Since v0.1.1
+
+| File | Change |
+|---|---|
+| `llm_client.py` | New — shared provider abstraction |
+| `app_oneagent.py` | Uses `llm_client`; adds `provider` to response |
+| `app_openllmetry.py` | Uses `llm_client`; adds `provider` to response |
+| `app_openinference.py` | Uses `llm_client`; conditional instrumentor on `PROVIDER`; adds `provider` to response |
+| `requirements_*.txt` | Added `openai>=1.0.0` to all three |
+| `requirements_openinference.txt` | Added `openinference-instrumentation-openai>=0.1.0` |
+| `Dockerfile.*` | Added `COPY llm_client.py .` to all three |
+| `.env.template` | Added `LLM_PROVIDER`, `OPENAI_API_KEY`; `MODEL` now blank (defaults per provider) |
+| `docker-compose.yml` | `LLM_PROVIDER` passed through to all three app services |
+| `README.md` | New "Provider Configuration" section |
+
+---
+
+## Upgrading from v0.1.1
+
+No breaking changes. Existing `.env` files using `ANTHROPIC_API_KEY` continue to work — `LLM_PROVIDER` defaults to `anthropic`. To add the new variable:
+
+```bash
+echo "LLM_PROVIDER=anthropic" >> .env
+```
+
+Rebuild containers after the update:
+
+```bash
+./stop.sh && ./start.sh --build
+```
+
+---
+
 # Release Notes — v0.1.1
 
 **Date:** 2026-07-01

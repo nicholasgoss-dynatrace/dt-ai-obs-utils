@@ -1,15 +1,19 @@
 """
 Dynatrace AI Observability — OpenInference instrumentation test
 ===============================================================
-Uses openinference-instrumentation-anthropic to auto-instrument the Anthropic SDK.
+Uses openinference-instrumentation-* to auto-instrument the LLM SDK.
 OpenInference uses its own attribute conventions (llm.model_name,
 llm.token_count.*, etc.), so a normalization step is required before Dynatrace
 AI Observability can understand the data.
 
+LLM provider is set via LLM_PROVIDER env var (default: anthropic).
+Supported: anthropic, openai. The correct OpenInference instrumentor is
+selected automatically based on the provider.
+
 Two normalization options (controlled by OTEL_EXPORTER_OTLP_ENDPOINT):
-  A) OTel Collector — set OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-     (default in docker-compose; the Collector applies the transforms locally)
-  B) OpenPipeline   — set OTEL_EXPORTER_OTLP_ENDPOINT=$DT_ENDPOINT/api/v2/otlp
+  A) OTel Collector -- set OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+     (default in podman-compose; the Collector applies the transforms locally)
+  B) OpenPipeline   -- set OTEL_EXPORTER_OTLP_ENDPOINT=$DT_ENDPOINT/api/v2/otlp
      (no Collector needed; transforms run server-side in Dynatrace)
 
 Run locally:
@@ -17,8 +21,8 @@ Run locally:
     OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
         uvicorn app_openinference:app --host 0.0.0.0 --port 8000
 
-Run via Docker Compose:
-    docker compose up openinference otel-collector  # http://localhost:8003/ask
+Run via podman-compose:
+    podman-compose up openinference otel-collector  # http://localhost:8003/ask
 
 Test:
     curl -s -X POST http://localhost:8003/ask \
@@ -29,29 +33,30 @@ Prerequisites in .env:
     DT_ENDPOINT                  — e.g. https://abc12345.live.dynatrace.com
     DT_API_TOKEN                 — scope: openTelemetryTrace.ingest
     OTEL_EXPORTER_OTLP_ENDPOINT  — Collector URL or DT OTLP endpoint
-    ANTHROPIC_API_KEY
-    MODEL                        — e.g. claude-haiku-4-5-20251001
+    LLM_PROVIDER                 — anthropic (default) or openai
+    ANTHROPIC_API_KEY / OPENAI_API_KEY
+    MODEL                        — optional; defaults per provider if unset
 """
 
 import os
 from contextlib import asynccontextmanager
 
-import anthropic
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from openinference.instrumentation.anthropic import AnthropicInstrumentor
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
 
+import llm_client
+
 load_dotenv()
 
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
-MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
+MODEL = llm_client.default_model()
 SERVICE = os.getenv("SERVICE_NAME", os.getenv("OTEL_SERVICE_NAME", "dt-ai-obs-openinference"))
 
 otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -61,8 +66,6 @@ if not otlp_endpoint:
     print("[INFO] Ensure OpenPipeline is configured, or set the env var to http://localhost:4318 for OTel Collector mode.")
 
 # OTLPSpanExporter uses the endpoint as-is when passed explicitly — always include /v1/traces.
-# Works for both OTel Collector (http://host:4318/v1/traces) and
-# Dynatrace direct (https://env.live.dynatrace.com/api/v2/otlp/v1/traces).
 if not otlp_endpoint.endswith("/v1/traces"):
     otlp_endpoint = otlp_endpoint.rstrip("/") + "/v1/traces"
 
@@ -78,10 +81,17 @@ exporter = OTLPSpanExporter(
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 
-# Instrument the Anthropic client — patches all anthropic.* calls automatically
-AnthropicInstrumentor().instrument(tracer_provider=tracer_provider)
+# Load the OpenInference instrumentor for the configured provider
+if llm_client.PROVIDER == "anthropic":
+    from openinference.instrumentation.anthropic import AnthropicInstrumentor
+    AnthropicInstrumentor().instrument(tracer_provider=tracer_provider)
+elif llm_client.PROVIDER == "openai":
+    from openinference.instrumentation.openai import OpenAIInstrumentor
+    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+else:
+    raise ValueError(f"No OpenInference instrumentor for provider: {llm_client.PROVIDER!r}")
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = llm_client.create_client()
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
@@ -105,30 +115,31 @@ class AskResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     instrumentation: str = "openinference"
+    provider: str = llm_client.PROVIDER
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    """AnthropicInstrumentor auto-records the LLM span on every client call."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1024,
-        system="You are a concise technical assistant.",
-        messages=[{"role": "user", "content": req.prompt}],
-    )
+    """OpenInference instrumentor auto-records the LLM span on every client call."""
+    resp = llm_client.call_llm(client, MODEL, req.prompt)
     return AskResponse(
-        result=response.content[0].text,
-        model=response.model,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
+        result=resp.content,
+        model=resp.model,
+        input_tokens=resp.input_tokens,
+        output_tokens=resp.output_tokens,
     )
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "instrumentation": "openinference", "otlp_endpoint": otlp_endpoint}
+    return {
+        "status": "ok",
+        "instrumentation": "openinference",
+        "provider": llm_client.PROVIDER,
+        "otlp_endpoint": otlp_endpoint,
+    }
 
 
 if __name__ == "__main__":

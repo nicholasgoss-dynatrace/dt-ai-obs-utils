@@ -1,18 +1,22 @@
 """
 Dynatrace AI Observability — OpenLLMetry instrumentation test
 =============================================================
-Uses the traceloop-sdk to auto-instrument the Anthropic SDK and export
+Uses the traceloop-sdk to auto-instrument the LLM SDK and export
 spans + metrics directly to Dynatrace via OTLP.
 
 @workflow  — top-level trace entry (like a "request")
 @task      — a named step inside the workflow
 
+LLM provider is set via LLM_PROVIDER env var (default: anthropic).
+Supported: anthropic, openai. The traceloop-sdk auto-instruments
+whichever SDK is active — no code changes needed when switching providers.
+
 Run locally:
     pip install -r requirements_openllmetry.txt
     uvicorn app_openllmetry:app --host 0.0.0.0 --port 8000
 
-Run via Docker Compose:
-    docker compose up openllmetry    # http://localhost:8002/ask
+Run via podman-compose:
+    podman-compose up openllmetry    # http://localhost:8002/ask
 
 Test:
     curl -s -X POST http://localhost:8002/ask \
@@ -22,19 +26,21 @@ Test:
 Prerequisites in .env:
     DT_ENDPOINT      — e.g. https://abc12345.live.dynatrace.com
     DT_API_TOKEN     — scopes: openTelemetryTrace.ingest, metrics.ingest, logs.ingest
-    ANTHROPIC_API_KEY
-    MODEL            — e.g. claude-haiku-4-5-20251001
+    LLM_PROVIDER     — anthropic (default) or openai
+    ANTHROPIC_API_KEY / OPENAI_API_KEY
+    MODEL            — optional; defaults per provider if unset
 """
 
 import os
 
-import anthropic
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
+
+import llm_client
 
 load_dotenv()
 
@@ -43,7 +49,7 @@ os.environ["OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"] = "delta"
 
 DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
-MODEL = os.getenv("MODEL", "claude-haiku-4-5-20251001")
+MODEL = llm_client.default_model()
 SERVICE_NAME = os.getenv("SERVICE_NAME", "dt-ai-obs-openllmetry")
 
 Traceloop.init(
@@ -53,7 +59,7 @@ Traceloop.init(
     disable_batch=True,
 )
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = llm_client.create_client()
 app = FastAPI(title="DT AI Obs — OpenLLMetry test")
 
 
@@ -67,29 +73,25 @@ class AskResponse(BaseModel):
     input_tokens: int
     output_tokens: int
     instrumentation: str = "openllmetry"
+    provider: str = llm_client.PROVIDER
 
 
 # ── Traceloop-instrumented building blocks ────────────────────────────────────
 
 @task(name="call_llm")
-def call_llm(prompt: str) -> dict:
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1024,
-        system="You are a concise technical assistant.",
-        messages=[{"role": "user", "content": prompt}],
-    )
+def call_llm_task(prompt: str) -> dict:
+    resp = llm_client.call_llm(client, MODEL, prompt)
     return {
-        "content": response.content[0].text,
-        "model": response.model,
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "content": resp.content,
+        "model": resp.model,
+        "input_tokens": resp.input_tokens,
+        "output_tokens": resp.output_tokens,
     }
 
 
 @workflow(name="ask_question")
 def ask_question(prompt: str) -> dict:
-    return call_llm(prompt)
+    return call_llm_task(prompt)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -107,7 +109,7 @@ def ask(req: AskRequest) -> AskResponse:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "instrumentation": "openllmetry"}
+    return {"status": "ok", "instrumentation": "openllmetry", "provider": llm_client.PROVIDER}
 
 
 if __name__ == "__main__":

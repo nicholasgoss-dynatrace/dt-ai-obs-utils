@@ -2,7 +2,7 @@
 
 > **Objective:** Demonstrate and compare the three paths to instrumenting an AI agent application for [Dynatrace AI Observability](https://docs.dynatrace.com/docs/observe/dynatrace-for-ai-observability) — OneAgent, OpenLLMetry, and OpenInference — so you can see exactly what each method captures, how the trace structure differs, and what it takes to get there.
 
-This project provides three identical FastAPI services, each calling the Anthropic Claude API with the same prompt, but instrumented differently. The test script sends prompts across a quality spectrum (poor → mediocre → excellent) to generate meaningful signal in AI Observability.
+This project provides three identical FastAPI services, each calling an LLM with the same prompt, but instrumented differently. The LLM provider is configurable (Anthropic or OpenAI). The test script sends prompts across a quality spectrum (poor → mediocre → excellent) to generate meaningful signal in AI Observability.
 
 ---
 
@@ -19,7 +19,7 @@ This project provides three identical FastAPI services, each calling the Anthrop
 ## Prerequisites
 
 - **Podman + podman-compose** — see setup below
-- **Anthropic API key** — obtain from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys); add to `.env` only, never commit it
+- **LLM API key** — Anthropic (`ANTHROPIC_API_KEY`) or OpenAI (`OPENAI_API_KEY`); add to `.env` only, never commit it
 - **Dynatrace SaaS tenant** with a DPS license and Grail enabled
 - **Dynatrace API token** with scopes: `openTelemetryTrace.ingest`, `metrics.ingest`, `logs.ingest`
 - **Dynatrace PaaS token** (OneAgent host install only) — from **Settings → Integration → Platform as a Service**
@@ -79,6 +79,34 @@ To stop everything:
 
 ```bash
 ./stop.sh
+```
+
+---
+
+## Provider Configuration
+
+All three services share a single `LLM_PROVIDER` setting. Set it in `.env` before starting:
+
+```bash
+# Use Anthropic (default)
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+
+# — or — use OpenAI
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+```
+
+Model defaults if `MODEL` is unset: `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` for OpenAI. Override with `MODEL=<any model string>` in `.env`.
+
+> **OneAgent note:** Enable the matching OneAgent feature flag for your provider — **Python Anthropic** or **Python OpenAI** — in Settings → OneAgent features.
+
+> **OpenInference note:** The correct instrumentor (`AnthropicInstrumentor` or `OpenAIInstrumentor`) is selected automatically at startup based on `LLM_PROVIDER`.
+
+After changing the provider, rebuild containers:
+
+```bash
+./stop.sh && ./start.sh --build
 ```
 
 ---
