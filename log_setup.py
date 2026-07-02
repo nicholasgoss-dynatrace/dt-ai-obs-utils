@@ -48,13 +48,18 @@ def setup_logging(
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
     set_logger_provider(logger_provider)
 
-    # Bridge Python logging to the OTel LoggerProvider so records are exported via OTLP.
-    logging.getLogger().addHandler(LoggingHandler(logger_provider=logger_provider))
-
     if inject_trace_context:
         # Injects otelTraceID / otelSpanID into every Python log record using
         # the active OTel span — only meaningful when the app owns the global provider.
         LoggingInstrumentor().instrument(set_logging_format=True)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # stdout handler — explicit because basicConfig is a no-op once any handler exists
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    root.addHandler(handler)
+    # Bridge Python logging to the OTel LoggerProvider so records are exported via OTLP.
+    root.addHandler(LoggingHandler(logger_provider=logger_provider))
+
     return logging.getLogger(service_name)
