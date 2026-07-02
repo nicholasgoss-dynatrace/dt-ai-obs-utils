@@ -25,6 +25,8 @@ services:
       - /var/lib/dynatrace/oneagent/agent/config:/var/lib/dynatrace/oneagent/agent/config
       # Agent binaries — host agent uses these to push liboneagentpython.so into the process
       - /opt/dynatrace/oneagent/agent/bin:/opt/dynatrace/oneagent/agent/bin:ro
+    logging:
+      driver: local
 
   # ── OpenLLMetry (traceloop-sdk, sends OTLP directly to Dynatrace) ───────────
   # Port: http://localhost:8002/ask

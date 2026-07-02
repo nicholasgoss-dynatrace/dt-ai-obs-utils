@@ -26,6 +26,7 @@ Required Dynatrace OneAgent feature flags (Settings -> OneAgent features):
     - Python FastAPI
 """
 
+import logging
 import os
 
 import uvicorn
@@ -34,15 +35,14 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 import llm_client
-import log_setup
 
 load_dotenv()
 
-DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
-DT_API_TOKEN = os.environ["DT_API_TOKEN"]
-SERVICE_NAME = os.getenv("SERVICE_NAME", "dt-ai-obs-oneagent")
-
-logger = log_setup.setup_logging(SERVICE_NAME, DT_ENDPOINT, DT_API_TOKEN, inject_trace_context=False)
+# OneAgent captures stdout via Log Monitoring and correlates logs to traces natively.
+# OTLP log export is not used here — it creates a separate service entity that splits
+# logs from the OneAgent-discovered service entity.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("dt-ai-obs-oneagent")
 
 app = FastAPI(title="DT AI Obs — OneAgent test")
 client = llm_client.create_client()
