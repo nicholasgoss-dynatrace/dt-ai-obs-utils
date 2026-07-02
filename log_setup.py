@@ -55,11 +55,9 @@ def setup_logging(
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    # stdout handler — explicit because basicConfig is a no-op once any handler exists
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    root.addHandler(handler)
     # Bridge Python logging to the OTel LoggerProvider so records are exported via OTLP.
+    # No StreamHandler: stdout would be captured by OneAgent Log Monitoring via journald
+    # and re-ingested under the wrong service entity, producing duplicates.
     root.addHandler(LoggingHandler(logger_provider=logger_provider))
 
     return logging.getLogger(service_name)
