@@ -1,3 +1,49 @@
+# Release Notes — v0.1.5
+
+**Date:** 2026-07-02
+**License:** Apache 2.0
+
+---
+
+## Overview
+
+Fixes duplicate log ingestion for the OpenLLMetry and OpenInference services, and removes non-functional OTLP log export from the OneAgent service.
+
+---
+
+## What's New
+
+### Duplicate log fix (OpenLLMetry and OpenInference)
+
+After v0.1.4, these services emitted logs both via OTLP (to the correct service entity) and to stdout. OneAgent Log Monitoring was ingesting the stdout/journald stream and creating a second copy of every log record attributed to the wrong service entity (`SERVICE-97B5EFE9D15D69BF` or null). Fixed by removing the `StreamHandler` from `log_setup.py` — logs now flow exclusively via OTLP to the correct service entity.
+
+### OneAgent log correlation
+
+OTLP log export for the OneAgent service is removed. OTLP created a separate service entity split from the OneAgent-discovered service, and OneAgent's proprietary trace IDs don't match OTel W3C trace IDs so log-to-trace correlation was broken regardless. The OneAgent service now logs to stdout only via standard Python `logging.basicConfig`.
+
+**Known limitation:** OneAgent Log Monitoring does not correlate containerized service logs to the correct service entity in this rootless Podman + journald setup. Log visibility for the OneAgent service in the Service Logs tab is not achievable in the current configuration.
+
+---
+
+## Changes Since v0.1.4
+
+| File | Change |
+|---|---|
+| `log_setup.py` | Removed `StreamHandler` — OTLP services emit logs via OTLP only |
+| `app_oneagent.py` | Removed `log_setup` import and OTLP export; uses `logging.basicConfig` + stdout |
+
+---
+
+## Upgrading from v0.1.4
+
+No breaking changes. Rebuild containers after the update:
+
+```bash
+./stop.sh && ./start.sh --build
+```
+
+---
+
 # Release Notes — v0.1.4
 
 **Date:** 2026-07-02
