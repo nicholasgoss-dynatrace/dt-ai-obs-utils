@@ -42,6 +42,7 @@ from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
 
 import llm_client
+import log_setup
 
 load_dotenv()
 
@@ -60,6 +61,7 @@ Traceloop.init(
     disable_batch=True,
 )
 
+logger = log_setup.setup_logging(SERVICE_NAME, DT_ENDPOINT, DT_API_TOKEN)
 client = llm_client.create_client()
 app = FastAPI(title="DT AI Obs — OpenLLMetry test")
 FastAPIInstrumentor.instrument_app(app)
@@ -100,7 +102,9 @@ def ask_question(prompt: str) -> dict:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
+    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
     result = ask_question(req.prompt)
+    logger.info("llm response model=%s input_tokens=%d output_tokens=%d", result["model"], result["input_tokens"], result["output_tokens"])
     return AskResponse(
         result=result["content"],
         model=result["model"],

@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements_oneagent.txt
 
 COPY app_oneagent.py .
 COPY llm_client.py .
+COPY log_setup.py .
 COPY docker-entrypoint-oneagent.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
