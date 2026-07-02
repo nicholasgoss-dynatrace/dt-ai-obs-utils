@@ -34,8 +34,15 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 import llm_client
+import log_setup
 
 load_dotenv()
+
+DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
+DT_API_TOKEN = os.environ["DT_API_TOKEN"]
+SERVICE_NAME = os.getenv("SERVICE_NAME", "dt-ai-obs-oneagent")
+
+logger = log_setup.setup_logging(SERVICE_NAME, DT_ENDPOINT, DT_API_TOKEN)
 
 app = FastAPI(title="DT AI Obs — OneAgent test")
 client = llm_client.create_client()
@@ -57,7 +64,9 @@ class AskResponse(BaseModel):
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
+    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
     resp = llm_client.call_llm(client, MODEL, req.prompt)
+    logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
         result=resp.content,
         model=resp.model,

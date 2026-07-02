@@ -52,6 +52,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
 
 import llm_client
+import log_setup
 
 load_dotenv()
 
@@ -93,6 +94,7 @@ else:
     raise ValueError(f"No OpenInference instrumentor for provider: {llm_client.PROVIDER!r}")
 
 client = llm_client.create_client()
+logger = log_setup.setup_logging(SERVICE, DT_ENDPOINT, DT_API_TOKEN)
 
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
@@ -125,7 +127,9 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     """OpenInference instrumentor auto-records the LLM span on every client call."""
+    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
     resp = llm_client.call_llm(client, MODEL, req.prompt)
+    logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
         result=resp.content,
         model=resp.model,
