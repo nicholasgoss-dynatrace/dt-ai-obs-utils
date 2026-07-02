@@ -19,7 +19,7 @@ import logging
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
-from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
@@ -47,6 +47,9 @@ def setup_logging(
     )
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
     set_logger_provider(logger_provider)
+
+    # Bridge Python logging to the OTel LoggerProvider so records are exported via OTLP.
+    logging.getLogger().addHandler(LoggingHandler(logger_provider=logger_provider))
 
     if inject_trace_context:
         # Injects otelTraceID / otelSpanID into every Python log record using
