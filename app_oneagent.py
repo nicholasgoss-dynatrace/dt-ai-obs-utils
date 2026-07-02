@@ -42,7 +42,7 @@ DT_ENDPOINT = os.environ["DT_ENDPOINT"].rstrip("/")
 DT_API_TOKEN = os.environ["DT_API_TOKEN"]
 SERVICE_NAME = os.getenv("SERVICE_NAME", "dt-ai-obs-oneagent")
 
-logger = log_setup.setup_logging(SERVICE_NAME, DT_ENDPOINT, DT_API_TOKEN)
+logger = log_setup.setup_logging(SERVICE_NAME, DT_ENDPOINT, DT_API_TOKEN, inject_trace_context=False)
 
 app = FastAPI(title="DT AI Obs — OneAgent test")
 client = llm_client.create_client()
