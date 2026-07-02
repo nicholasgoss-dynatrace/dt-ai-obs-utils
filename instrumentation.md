@@ -10,10 +10,12 @@ This document explains how each instrumentation method works, what code it requi
 |---|---|---|---|
 | **Mechanism** | ptrace injection from host | SDK import + decorator | SDK import + OTel setup |
 | **App code changes** | None | ~10 lines | ~20 lines |
-| **Trace hierarchy** | HTTP span → LLM child span | workflow → task → LLM | Flat LLM span |
+| **Trace hierarchy** | HTTP span → LLM child span | HTTP span → workflow → task → LLM | HTTP span → LLM span |
+| **HTTP entry span** | Auto via OneAgent FastAPI sensor | `FastAPIInstrumentor` | `FastAPIInstrumentor` |
 | **Attribute convention** | `gen_ai.*` (native) | `gen_ai.*` (native) | OpenInference → normalized to `gen_ai.*` |
 | **Normalization needed** | No | No | Yes (OTel Collector or OpenPipeline) |
 | **Prompt/response content** | Feature flag opt-in | `TRACELOOP_TRACE_CONTENT=true` | Captured by default |
+| **Throughput / failure rate** | ✅ Auto | ✅ via FastAPI instrumentor | ✅ via FastAPI instrumentor |
 | **Provider agnostic** | Yes (via feature flags) | Yes (auto-detects SDK) | Yes (conditional instrumentor) |
 | **Data path to Dynatrace** | OneAgent daemon | OTLP direct | OTLP → OTel Collector → Dynatrace |
 
@@ -109,6 +111,7 @@ Each LLM SDK call automatically generates a child span. The `@workflow` and `@ta
 
 ```python
 # app_openllmetry.py
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
 
@@ -121,6 +124,8 @@ Traceloop.init(
 )
 
 client = llm_client.create_client()
+app = FastAPI(title="DT AI Obs — OpenLLMetry test")
+FastAPIInstrumentor.instrument_app(app)     # ← HTTP entry span for throughput/failure rate
 
 @task(name="call_llm")                      # ← named task span
 def call_llm_task(prompt: str) -> dict:
@@ -148,28 +153,31 @@ environment:
 ### Trace structure in Dynatrace
 
 ```
-ask_question  (workflow span — @workflow decorator)
-└── call_llm  (task span — @task decorator)
-    └── anthropic.chat  (LLM span — auto-instrumented by traceloop-sdk)
-          gen_ai.system              = anthropic
-          gen_ai.request.model       = claude-haiku-4-5-20251001
-          gen_ai.usage.input_tokens  = 20
-          gen_ai.usage.output_tokens = 225
-          gen_ai.input.messages      = [{"role": "user", "parts": [...]}]
-          gen_ai.output.messages     = [{"role": "assistant", "parts": [...]}]
+POST /ask  (HTTP server span — FastAPIInstrumentor)
+└── ask_question  (workflow span — @workflow decorator)
+    └── call_llm  (task span — @task decorator)
+        └── anthropic.chat  (LLM span — auto-instrumented by traceloop-sdk)
+              gen_ai.system              = anthropic
+              gen_ai.request.model       = claude-haiku-4-5-20251001
+              gen_ai.usage.input_tokens  = 20
+              gen_ai.usage.output_tokens = 225
+              gen_ai.input.messages      = [{"role": "user", "parts": [...]}]
+              gen_ai.output.messages     = [{"role": "assistant", "parts": [...]}]
 ```
 
-The workflow → task → LLM hierarchy is the key differentiator. It mirrors how a real agent application would be structured: a named workflow (an agent run) containing tasks (reasoning steps) each of which may call an LLM one or more times.
+The HTTP entry span is required for Dynatrace to compute throughput and failure rate in the Service view. The workflow → task → LLM hierarchy beneath it is the key differentiator from the other methods. It mirrors how a real agent application would be structured: a named workflow (an agent run) containing tasks (reasoning steps) each of which may call an LLM one or more times.
 
 ### Data flow
 
 ```
 app_openllmetry.py
   │  traceloop-sdk patches anthropic client at init
+  │  FastAPIInstrumentor adds HTTP server span at request boundary
   │
-  ├── @workflow span created on ask_question() call
-  │   └── @task span created on call_llm_task() call
-  │       └── LLM span created on client.messages.create()
+  ├── HTTP server span created on POST /ask  (FastAPIInstrumentor)
+  │   └── @workflow span created on ask_question() call
+  │       └── @task span created on call_llm_task() call
+  │           └── LLM span created on client.messages.create()
   │
   └── BatchSpanProcessor → OTLP exporter
         → DT_ENDPOINT/api/v2/otlp  (direct, no collector needed)
@@ -190,10 +198,11 @@ Because OpenInference uses different attribute names than Dynatrace AI Observabi
 
 ```python
 # app_openinference.py
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 # Full OTel SDK setup (TracerProvider, exporter, processor)
 tracer_provider = TracerProvider(resource=Resource.create({SERVICE_NAME: SERVICE}))
@@ -209,6 +218,8 @@ elif llm_client.PROVIDER == "openai":
     OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
 
 client = llm_client.create_client()
+app = FastAPI(title="DT AI Obs — OpenInference test", lifespan=lifespan)
+FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)  # ← HTTP entry span
 
 @app.post("/ask")
 def ask(req: AskRequest) -> AskResponse:
@@ -216,7 +227,7 @@ def ask(req: AskRequest) -> AskResponse:
     ...
 ```
 
-More boilerplate than OpenLLMetry because you wire the full OTel SDK manually. The upside is full control over the exporter pipeline, resource attributes, and span processor configuration.
+More boilerplate than OpenLLMetry because you wire the full OTel SDK manually. Passing `tracer_provider=tracer_provider` to `FastAPIInstrumentor` ensures the HTTP span uses the same provider and exporter as the LLM spans, keeping all spans in a single trace. The upside is full control over the exporter pipeline, resource attributes, and span processor configuration.
 
 ### Raw span attributes (before normalization)
 
@@ -257,7 +268,8 @@ processors:
 ### Trace structure in Dynatrace (after normalization)
 
 ```
-messages.create  (LLM span — flat, no workflow/task hierarchy)
+POST /ask  (HTTP server span — FastAPIInstrumentor)
+└── messages.create  (LLM span — OpenInference conventions, normalized by Collector)
   gen_ai.operation.kind      = chat                     ← normalized
   gen_ai.system              = anthropic                ← normalized
   gen_ai.request.model       = claude-haiku-4-5-20251001
@@ -268,14 +280,16 @@ messages.create  (LLM span — flat, no workflow/task hierarchy)
   ai.observability.source    = openinference            ← source tag for DQL filtering
 ```
 
-Unlike OpenLLMetry, there is no workflow/task hierarchy unless you manually add parent spans using the OTel tracer API.
+Unlike OpenLLMetry, there is no workflow/task hierarchy unless you manually add parent spans using the OTel tracer API. The HTTP entry span is the only structural parent, but it is sufficient for Dynatrace to compute throughput and failure rate.
 
 ### Data flow
 
 ```
 app_openinference.py
   │  AnthropicInstrumentor patches anthropic client at init
+  │  FastAPIInstrumentor adds HTTP server span at request boundary
   │
+  ├── HTTP server span created on POST /ask  (FastAPIInstrumentor)
   └── LLM span created on client.messages.create()
       (OpenInference attribute conventions: llm.model_name, llm.token_count.*, etc.)
         │

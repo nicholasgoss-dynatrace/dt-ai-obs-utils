@@ -37,6 +37,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
 
@@ -61,6 +62,7 @@ Traceloop.init(
 
 client = llm_client.create_client()
 app = FastAPI(title="DT AI Obs — OpenLLMetry test")
+FastAPIInstrumentor.instrument_app(app)
 
 
 class AskRequest(BaseModel):
