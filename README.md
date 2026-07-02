@@ -8,11 +8,11 @@ This project provides three identical FastAPI services, each calling an LLM with
 
 ## Instrumentation Methods at a Glance
 
-| Service | Method | Port | Code changes? | Requires OneAgent? | OTel Collector? |
-|---|---|---|---|---|---|
-| `app_oneagent.py` | **OneAgent** (auto) | 8001 | ❌ None | ✅ Yes | ❌ No |
-| `app_openllmetry.py` | **OpenLLMetry** SDK | 8002 | ✅ ~10 lines | ❌ No | ❌ No |
-| `app_openinference.py` | **OpenInference** SDK | 8003 | ✅ ~20 lines | ❌ No | ✅ Yes (included) |
+| Service | Method | Port | Code changes? | Requires OneAgent? | OTel Collector? | HTTP metrics? |
+|---|---|---|---|---|---|---|
+| `app_oneagent.py` | **OneAgent** (auto) | 8001 | ❌ None | ✅ Yes | ❌ No | ✅ Auto |
+| `app_openllmetry.py` | **OpenLLMetry** SDK | 8002 | ✅ ~10 lines | ❌ No | ❌ No | ✅ FastAPI instrumentor |
+| `app_openinference.py` | **OpenInference** SDK | 8003 | ✅ ~20 lines | ❌ No | ✅ Yes (included) | ✅ FastAPI instrumentor |
 
 ---
 
@@ -172,28 +172,29 @@ sudo podman rm dt-ai-obs-test_oneagent_1
 
 ### 🟣 OpenLLMetry (port 8002)
 
-**How it works:** The `traceloop-sdk` wraps the Anthropic SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy. Prompt and completion content are captured for quality analysis.
+**How it works:** The `traceloop-sdk` wraps the Anthropic SDK and exports spans + metrics directly to Dynatrace via OTLP. `@workflow` and `@task` decorators in `app_openllmetry.py` define the trace hierarchy. Prompt and completion content are captured for quality analysis. `FastAPIInstrumentor` adds an HTTP server entry span on every request so Dynatrace can compute throughput and failure rate.
 
 **Required `.env` values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `ANTHROPIC_API_KEY`
 
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openllmetry` (or your `SERVICE_NAME`) appears after the first request
-- **Distributed Tracing**: trace named `ask_question` with a `workflow → task → LLM` span hierarchy
+- **Distributed Tracing**: trace with `POST /ask` HTTP server span → `ask_question` workflow → `call_llm` task → LLM span hierarchy
 - Attributes to verify: `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
-- **Metrics**: `gen_ai.*` OTLP metrics (token totals, request counts) exported alongside traces
+- **Metrics**: `gen_ai.*` OTLP metrics (token totals, request counts) exported alongside traces; **throughput and failure rate** visible in the Service view
 
 ---
 
 ### 🟢 OpenInference (port 8003)
 
-**How it works:** `openinference-instrumentation-anthropic` auto-instruments the Anthropic client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability expects `gen_ai.*` attributes, spans are routed through the included OTel Collector, which normalizes them before forwarding to Dynatrace. Prompt and response content are captured by default in `input.value` / `output.value`.
+**How it works:** `openinference-instrumentation-anthropic` auto-instruments the Anthropic client using OpenInference attribute conventions (`llm.model_name`, `llm.token_count.*`, etc.). Because Dynatrace AI Observability expects `gen_ai.*` attributes, spans are routed through the included OTel Collector, which normalizes them before forwarding to Dynatrace. Prompt and response content are captured by default in `input.value` / `output.value`. `FastAPIInstrumentor` adds an HTTP server entry span on every request so Dynatrace can compute throughput and failure rate.
 
 **Required `.env` values:** `DT_ENDPOINT`, `DT_API_TOKEN`, `ANTHROPIC_API_KEY`
 
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openinference` (or your `SERVICE_NAME`) appears after the first request
-- **Distributed Tracing**: verify `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present (these are the normalized attributes)
+- **Distributed Tracing**: `POST /ask` HTTP server span (parent) with `messages.create` LLM span as child; verify `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present
 - `ai.observability.source = openinference` confirms the OTel Collector transform ran
+- **Throughput and failure rate** now visible in the Service view
 
 **Alternative — OpenPipeline (no Collector):** Configure a pipeline in Dynatrace (Ctrl+K → **OpenPipeline** → **Spans**) using the attribute mappings in `otel-collector-config.yaml`, with routing matcher `isNotNull(openinference.span.kind)`. Then update `docker-compose.yml` to set `OTEL_EXPORTER_OTLP_ENDPOINT=${DT_ENDPOINT}/api/v2/otlp` and remove the `depends_on` and `otel-collector` service.
 
@@ -206,9 +207,9 @@ Once all three are running and sending data, AI Observability → Explorer surfa
 | Dimension | OneAgent | OpenLLMetry | OpenInference |
 |---|---|---|---|
 | **Setup effort** | Zero code changes | ~10 lines + decorators | ~20 lines + normalization |
-| **Trace structure** | HTTP entry span → LLM child span | `workflow → task → LLM` hierarchy | Flat LLM spans |
+| **Trace structure** | HTTP entry span → LLM child span | HTTP entry span → `workflow → task → LLM` | HTTP entry span → LLM span |
 | **Prompt content** | Requires feature flag opt-in | ✅ Captured | ✅ Captured |
-| **Metrics** | Derived from traces | ✅ Native OTLP metrics | Derived from traces |
+| **HTTP metrics (throughput/failure rate)** | ✅ Auto via OneAgent | ✅ FastAPI instrumentor | ✅ FastAPI instrumentor |
 | **Attribute source** | Auto via OneAgent sensor | Native `gen_ai.*` | OpenInference → normalized via Collector |
 
 The test script's prompt quality tiers (poor / mediocre / excellent) are designed to produce clearly different token counts, latencies, and response lengths — giving AI Observability enough signal to show you patterns across all three methods simultaneously.

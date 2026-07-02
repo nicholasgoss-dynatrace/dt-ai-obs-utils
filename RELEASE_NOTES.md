@@ -1,3 +1,57 @@
+# Release Notes — v0.1.3
+
+**Date:** 2026-07-02
+**License:** Apache 2.0
+
+---
+
+## Overview
+
+Adds FastAPI HTTP instrumentation to the OpenLLMetry and OpenInference services so that Dynatrace can compute throughput and failure rate for all three services — not just the OneAgent service. Previously, both OTel services emitted only LLM-level spans (no HTTP entry point), leaving the Service view without request count or failure rate data.
+
+---
+
+## What's New
+
+### HTTP entry spans for OpenLLMetry and OpenInference
+
+Both OTel services now instrument the FastAPI layer using `opentelemetry-instrumentation-fastapi`. Each inbound request generates a `server` span with `http.method`, `http.route`, and `http.status_code` as the trace root. Dynatrace uses these to populate `dt.service.request.count` and `dt.service.request.failure_count`, making throughput and failure rate visible in the Service view and AI Observability Explorer.
+
+- **OpenLLMetry** — `FastAPIInstrumentor.instrument_app(app)` added after `Traceloop.init()`; the SDK's globally registered tracer provider is picked up automatically.
+- **OpenInference** — `FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)` added with an explicit provider reference, ensuring HTTP and LLM spans share the same exporter pipeline and appear in a single trace.
+
+### Updated trace hierarchy
+
+| Service | Before | After |
+|---|---|---|
+| OpenLLMetry | `ask_question` → `call_llm` → LLM span | `POST /ask` → `ask_question` → `call_llm` → LLM span |
+| OpenInference | `messages.create` (flat) | `POST /ask` → `messages.create` |
+
+---
+
+## Changes Since v0.1.2
+
+| File | Change |
+|---|---|
+| `app_openllmetry.py` | Import and call `FastAPIInstrumentor.instrument_app(app)` |
+| `app_openinference.py` | Import and call `FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)` |
+| `requirements_openllmetry.txt` | Added `opentelemetry-instrumentation-fastapi>=0.45b0` |
+| `requirements_openinference.txt` | Added `opentelemetry-instrumentation-fastapi>=0.45b0` |
+| `README.md` | Updated comparison table, method descriptions, and "What to look for" sections |
+| `instrumentation.md` | Updated comparison table, trace diagrams, code snippets, and data flow diagrams |
+
+---
+
+## Upgrading from v0.1.2
+
+No breaking changes. Rebuild containers after the update:
+
+```bash
+./stop.sh && ./start.sh --build
+```
+
+---
+
 # Release Notes — v0.1.2
 
 **Date:** 2026-07-01

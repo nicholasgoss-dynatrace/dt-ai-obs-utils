@@ -45,6 +45,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -103,6 +104,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="DT AI Obs — OpenInference test", lifespan=lifespan)
+FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 
 
 class AskRequest(BaseModel):
