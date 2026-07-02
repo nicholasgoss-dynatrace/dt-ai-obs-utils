@@ -140,6 +140,7 @@ Without this, every injection attempt logs `Container injection failed` even whe
 In **Settings → Collect and capture → General monitoring settings → OneAgent features**, enable:
 - **Python Anthropic** *(experimental sensor — required)*
 - **Python FastAPI** *(required — creates the HTTP entry-point span that LLM spans nest under)*
+- **Log Monitoring** *(required for log-to-trace correlation — enables OneAgent to capture process stdout and link log lines to traces via its own context propagation)*
 
 Restart OneAgent after enabling:
 ```bash
