@@ -1,3 +1,71 @@
+# Release Notes — v0.1.4
+
+**Date:** 2026-07-02
+**License:** Apache 2.0
+
+---
+
+## Overview
+
+Adds trace-correlated log export to all three services. Every log record now carries the active `trace_id` and `span_id`, enabling log-to-trace correlation in Dynatrace for all three instrumentation methods — including OneAgent, which previously had no log visibility in the Service view.
+
+---
+
+## What's New
+
+### Shared `log_setup.py`
+
+New module used by all three apps. On startup it:
+
+- Creates a `LoggerProvider` with an `OTLPLogExporter` pointed directly at `DT_ENDPOINT/api/v2/otlp/v1/logs` — bypassing the OTel Collector for OpenInference so logs always reach Dynatrace regardless of where spans go
+- Calls `LoggingInstrumentor().instrument(set_logging_format=True)` to inject `otelTraceID` and `otelSpanID` into every Python log record via the active span context
+
+### Per-request structured logging
+
+Each `/ask` handler now emits two INFO log lines within the active span:
+
+```
+ask request received prompt_length=<n> provider=<anthropic|openai>
+llm response model=<model> input_tokens=<n> output_tokens=<n>
+```
+
+Because these are emitted inside the HTTP server span (and for OpenLLMetry, inside the workflow span), Dynatrace can link them directly to the trace.
+
+### OneAgent log correlation
+
+OneAgent manages its own tracer provider. `LoggingInstrumentor` reads the active span from `trace.get_current_span()` — which returns OneAgent's injected span — so log records carry OneAgent trace IDs and correlate to OneAgent traces automatically. No additional setup required.
+
+---
+
+## Changes Since v0.1.3
+
+| File | Change |
+|---|---|
+| `log_setup.py` | New — shared OTLP log export and logging instrumentation |
+| `app_oneagent.py` | Imports `log_setup`; reads `DT_ENDPOINT`/`DT_API_TOKEN`; logs per-request events |
+| `app_openllmetry.py` | Imports `log_setup`; logs per-request events |
+| `app_openinference.py` | Imports `log_setup`; logs per-request events |
+| `requirements_oneagent.txt` | Added `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-logging` |
+| `requirements_openllmetry.txt` | Added `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-logging` |
+| `requirements_openinference.txt` | Added `opentelemetry-instrumentation-logging` |
+| `Dockerfile.oneagent` | Added `COPY log_setup.py .` |
+| `Dockerfile.openllmetry` | Added `COPY log_setup.py .` |
+| `Dockerfile.openinference` | Added `COPY log_setup.py .` |
+
+---
+
+## Upgrading from v0.1.3
+
+No breaking changes. `DT_ENDPOINT` and `DT_API_TOKEN` are now read by `app_oneagent.py` in addition to the OTel apps — both are already present in `.env` so no changes needed there.
+
+Rebuild containers after the update:
+
+```bash
+./stop.sh && ./start.sh --build
+```
+
+---
+
 # Release Notes — v0.1.3
 
 **Date:** 2026-07-02
