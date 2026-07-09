@@ -167,7 +167,7 @@ sudo podman rm dt-ai-obs-test_oneagent_1
 
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service appears after the first request
-- **Distributed Tracing**: `POST /ask` span with a child `anthropic` span carrying `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+- **Distributed Tracing**: `POST /ask` span with a child `anthropic` span carrying `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`
 
 ---
 
@@ -180,7 +180,7 @@ sudo podman rm dt-ai-obs-test_oneagent_1
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openllmetry` (or your `SERVICE_NAME`) appears after the first request
 - **Distributed Tracing**: trace with `POST /ask` HTTP server span → `ask_question` workflow → `call_llm` task → LLM span hierarchy
-- Attributes to verify: `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+- Attributes to verify: `gen_ai.system`, `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.usage.reasoning.output_tokens`, `gen_ai.response.finish_reasons`
 - **Metrics**: `gen_ai.*` OTLP metrics (token totals, request counts) exported alongside traces; **throughput and failure rate** visible in the Service view
 
 ---
@@ -193,7 +193,7 @@ sudo podman rm dt-ai-obs-test_oneagent_1
 
 **What to look for in Dynatrace:**
 - **AI Observability → Explorer**: service `dt-ai-obs-openinference` (or your `SERVICE_NAME`) appears after the first request
-- **Distributed Tracing**: `POST /ask` HTTP server span (parent) with `messages.create` LLM span as child; verify `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present
+- **Distributed Tracing**: `POST /ask` HTTP server span (parent) with `messages.create` LLM span as child; verify `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present (normalized from OpenInference by the OTel Collector)
 - `ai.observability.source = openinference` confirms the OTel Collector transform ran
 - **Throughput and failure rate** now visible in the Service view
 

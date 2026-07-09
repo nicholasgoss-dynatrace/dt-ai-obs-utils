@@ -55,10 +55,15 @@ make_payload() {
     python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1]}))" "$1"
 }
 
+make_error_payload() {
+    python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'model': sys.argv[2]}))" "$1" "$2"
+}
+
 call_service() {
     local name="$1"
     local port="$2"
     local payload="$3"
+    local expect_error="${4:-false}"
 
     response=$(curl -s -X POST "http://localhost:${port}/ask" \
         -H "Content-Type: application/json" \
@@ -72,17 +77,43 @@ call_service() {
 
     python3 -c "
 import sys, json
+expect_error = '$expect_error' == 'true'
 try:
     d = json.load(sys.stdin)
-    tokens_in  = d.get('input_tokens', '?')
-    tokens_out = d.get('output_tokens', '?')
-    model      = d.get('model', 'n/a')
-    snippet    = d.get('result', '')[:120].replace('\n', ' ')
-    print(f'    {\"$name\":<14}  [{model}] in={tokens_in} out={tokens_out}  \"{snippet}...\"')
+    if expect_error:
+        detail = d.get('detail', str(d))[:120]
+        print(f'    {\"$name\":<14}  [EXPECTED ERROR] {detail}')
+    else:
+        tokens_in  = d.get('input_tokens', '?')
+        tokens_out = d.get('output_tokens', '?')
+        model      = d.get('model', 'n/a')
+        snippet    = d.get('result', '')[:120].replace('\n', ' ')
+        print(f'    {\"$name\":<14}  [{model}] in={tokens_in} out={tokens_out}  \"{snippet}...\"')
 except Exception as e:
-    print(f'    {\"$name\":<14}  PARSE ERROR: {e}')
-    print(sys.stdin.read()[:200])
+    if expect_error:
+        print(f'    {\"$name\":<14}  [EXPECTED ERROR] {\"$response\"[:120]}')
+    else:
+        print(f'    {\"$name\":<14}  PARSE ERROR: {e}')
 " <<< "$response" 2>/dev/null || printf "    %-14s  RAW: %s\n" "$name" "${response:0:120}"
+}
+
+run_error_round() {
+    local invalid_model="claude-not-a-real-model"
+    local payload
+    payload=$(make_error_payload "ping" "$invalid_model")
+
+    echo ""
+    printf "  ── Error validation round ───────────────────────────────────────────────\n"
+    echo ""
+    echo "  [ERROR]     Deliberate invalid model to verify error.type attribute capture"
+    printf "  Model:  \"%s\"\n" "$invalid_model"
+
+    call_service "OneAgent"      8001 "$payload" true &
+    call_service "OpenLLMetry"   8002 "$payload" true &
+    call_service "OpenInference" 8003 "$payload" true &
+    wait
+    echo ""
+    echo "  Verify in Dynatrace: error spans should carry error.type on the LLM child span."
 }
 
 run_prompt() {
@@ -125,6 +156,9 @@ else
             sleep 2
         fi
     done
+
+    sleep 2
+    run_error_round
 fi
 
 echo ""
