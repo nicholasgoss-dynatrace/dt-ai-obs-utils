@@ -60,6 +60,20 @@ services:
     depends_on:
       - otel-collector
 
+  # ── MCP (Dynatrace MCP server, stdio transport, mcp.* OTel spans) ────────────
+  # Port: http://localhost:8004/ask
+  # Requires DT_PLATFORM_TOKEN and DT_APPS_ENDPOINT (or DT_ENDPOINT for auto-derivation)
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    ports:
+      - "8004:8000"
+    env_file: .env
+    environment:
+      - SERVICE_NAME=${SERVICE_NAME:-dt-ai-obs-mcp}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+
   # ── OTel Collector (normalizes OpenInference attrs → gen_ai.*) ───────────────
   # Not needed if using OpenPipeline for the openinference service.
   otel-collector:

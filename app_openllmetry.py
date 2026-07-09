@@ -32,6 +32,7 @@ Prerequisites in .env:
 """
 
 import os
+import uuid
 
 import uvicorn
 from dotenv import load_dotenv
@@ -43,6 +44,7 @@ from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
 
 import llm_client
+import mcp_client
 import log_setup
 
 load_dotenv()
@@ -72,6 +74,8 @@ class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
     use_tools: bool = False
+    use_mcp: bool = False
+    conversation_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -86,14 +90,18 @@ class AskResponse(BaseModel):
 # ── Traceloop-instrumented building blocks ────────────────────────────────────
 
 @task(name="call_llm")
-def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
+def call_llm_task(prompt: str, model: str, use_tools: bool = False, use_mcp: bool = False) -> dict:
     try:
-        if use_tools:
+        if use_mcp:
+            resp = mcp_client.call_llm_with_mcp(client, model, prompt)
+        elif use_tools:
             resp = llm_client.call_llm_with_tools(client, model, prompt)
         else:
             resp = llm_client.call_llm(client, model, prompt)
     except Exception as exc:
-        trace.get_current_span().record_exception(exc)
+        span = trace.get_current_span()
+        span.set_attribute("exception.type", type(exc).__qualname__)
+        span.record_exception(exc)
         raise
     return {
         "content": resp.content,
@@ -104,16 +112,24 @@ def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
 
 
 @workflow(name="ask_question")
-def ask_question(prompt: str, model: str, use_tools: bool = False) -> dict:
-    return call_llm_task(prompt, model, use_tools)
+def ask_question(prompt: str, model: str, use_tools: bool = False, use_mcp: bool = False, conversation_id: str = "") -> dict:
+    span = trace.get_current_span()
+    span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openllmetry-001")
+    span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
+    span.set_attribute("gen_ai.conversation.id", conversation_id)
+    return call_llm_task(prompt, model, use_tools, use_mcp)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
-    result = ask_question(req.prompt, req.model or MODEL, req.use_tools)
+    conversation_id = req.conversation_id or str(uuid.uuid4())
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s use_mcp=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, req.use_mcp, conversation_id)
+    trace.get_current_span().set_attribute("gen_ai.conversation.id", conversation_id)
+    result = ask_question(req.prompt, req.model or MODEL, req.use_tools, req.use_mcp, conversation_id)
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", result["model"], result["input_tokens"], result["output_tokens"])
     return AskResponse(
         result=result["content"],

@@ -1,12 +1,10 @@
 anthropic>=0.40.0
 mcp>=1.0.0
 openai>=1.0.0
-openinference-instrumentation-anthropic>=0.1.4
-openinference-instrumentation-openai>=0.1.0
-opentelemetry-sdk>=1.24.0
-opentelemetry-exporter-otlp-proto-http>=1.24.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp-proto-http>=1.24.0
 opentelemetry-instrumentation-fastapi>=0.45b0
 opentelemetry-instrumentation-logging>=0.45b0
 python-dotenv>=1.0.0

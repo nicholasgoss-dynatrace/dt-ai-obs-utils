@@ -39,6 +39,7 @@ Prerequisites in .env:
 """
 
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -53,6 +54,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
 
 import llm_client
+import mcp_client
 import log_setup
 
 load_dotenv()
@@ -114,6 +116,8 @@ class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
     use_tools: bool = False
+    use_mcp: bool = False
+    conversation_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -130,14 +134,25 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     """OpenInference instrumentor auto-records the LLM span on every client call."""
-    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    conversation_id = req.conversation_id or str(uuid.uuid4())
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s use_mcp=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, req.use_mcp, conversation_id)
+    span = trace.get_current_span()
+    span.set_attribute("gen_ai.conversation.id", conversation_id)
+    span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
+    span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     try:
-        if req.use_tools:
+        if req.use_mcp:
+            resp = mcp_client.call_llm_with_mcp(client, req.model or MODEL, req.prompt)
+        elif req.use_tools:
             resp = llm_client.call_llm_with_tools(client, req.model or MODEL, req.prompt)
         else:
             resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
     except Exception as exc:
-        trace.get_current_span().record_exception(exc)
+        span = trace.get_current_span()
+        span.set_attribute("exception.type", type(exc).__qualname__)
+        span.record_exception(exc)
         raise
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
