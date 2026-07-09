@@ -71,9 +71,11 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
 
     async with stdio_client(server_params) as (read, write):
         session_id = str(uuid.uuid4())
+        _otel_trace.get_current_span().set_attribute("mcp.session_id", session_id)
         async with ClientSession(read, write) as session:
             init_result = await session.initialize()
             protocol_version = getattr(init_result, "protocolVersion", "unknown")
+            _otel_trace.get_current_span().set_attribute("mcp.protocol.version", protocol_version)
 
             # List available tools and build Anthropic tool definitions
             tools_result = await session.list_tools()

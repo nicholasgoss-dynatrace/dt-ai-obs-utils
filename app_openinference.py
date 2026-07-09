@@ -85,6 +85,7 @@ exporter = OTLPSpanExporter(
     headers={"Authorization": f"Api-Token {DT_API_TOKEN}"},
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(tracer_provider)
 
 # Load the OpenInference instrumentor for the configured provider
 if llm_client.PROVIDER == "anthropic":
