@@ -16,6 +16,10 @@ import operator as op
 import os
 from dataclasses import dataclass
 
+from opentelemetry import trace as _otel_trace
+
+_tracer = _otel_trace.get_tracer("llm_client")
+
 PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
 
 _MODEL_DEFAULTS = {
@@ -207,7 +211,12 @@ def call_llm_with_tools(
 
         if resp.stop_reason == "tool_use":
             tool_block = next(b for b in resp.content if b.type == "tool_use")
-            tool_result = _safe_eval(tool_block.input.get("expression", ""))
+            with _tracer.start_as_current_span("execute_tool") as tool_span:
+                tool_span.set_attribute("gen_ai.tool.name", tool_block.name)
+                tool_span.set_attribute("gen_ai.tool_call.id", tool_block.id)
+                tool_span.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
+                tool_span.set_attribute("gen_ai.tool.type", "function")
+                tool_result = _safe_eval(tool_block.input.get("expression", ""))
 
             # Serialize content blocks to plain dicts — instrumentation wrappers
             # can make SDK objects non-serializable when passed back to the API.
@@ -284,7 +293,12 @@ def call_llm_with_tools(
         if resp.choices[0].finish_reason == "tool_calls":
             tool_call = resp.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
-            tool_result = _safe_eval(args.get("expression", ""))
+            with _tracer.start_as_current_span("execute_tool") as tool_span:
+                tool_span.set_attribute("gen_ai.tool.name", tool_call.function.name)
+                tool_span.set_attribute("gen_ai.tool_call.id", tool_call.id)
+                tool_span.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
+                tool_span.set_attribute("gen_ai.tool.type", "function")
+                tool_result = _safe_eval(args.get("expression", ""))
 
             messages.append(resp.choices[0].message)
             messages.append(
