@@ -39,6 +39,7 @@ Prerequisites in .env:
 """
 
 import os
+import uuid
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -114,6 +115,7 @@ class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
     use_tools: bool = False
+    conversation_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -130,8 +132,10 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     """OpenInference instrumentor auto-records the LLM span on every client call."""
-    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    conversation_id = req.conversation_id or str(uuid.uuid4())
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, conversation_id)
     span = trace.get_current_span()
+    span.set_attribute("gen_ai.conversation.id", conversation_id)
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
     span.set_attribute("gen_ai.agent.version", "0.1.5")

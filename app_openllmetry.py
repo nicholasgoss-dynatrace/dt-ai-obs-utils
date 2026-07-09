@@ -32,6 +32,7 @@ Prerequisites in .env:
 """
 
 import os
+import uuid
 
 import uvicorn
 from dotenv import load_dotenv
@@ -72,6 +73,7 @@ class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
     use_tools: bool = False
+    conversation_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -104,12 +106,13 @@ def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
 
 
 @workflow(name="ask_question")
-def ask_question(prompt: str, model: str, use_tools: bool = False) -> dict:
+def ask_question(prompt: str, model: str, use_tools: bool = False, conversation_id: str = "") -> dict:
     span = trace.get_current_span()
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openllmetry-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
+    span.set_attribute("gen_ai.conversation.id", conversation_id)
     return call_llm_task(prompt, model, use_tools)
 
 
@@ -117,8 +120,10 @@ def ask_question(prompt: str, model: str, use_tools: bool = False) -> dict:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
-    result = ask_question(req.prompt, req.model or MODEL, req.use_tools)
+    conversation_id = req.conversation_id or str(uuid.uuid4())
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, conversation_id)
+    trace.get_current_span().set_attribute("gen_ai.conversation.id", conversation_id)
+    result = ask_question(req.prompt, req.model or MODEL, req.use_tools, conversation_id)
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", result["model"], result["input_tokens"], result["output_tokens"])
     return AskResponse(
         result=result["content"],
