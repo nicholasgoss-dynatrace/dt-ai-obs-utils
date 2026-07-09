@@ -27,6 +27,17 @@ _MODEL_DEFAULTS = {
     "openai": "gpt-4o-mini",
 }
 
+# Context window sizes for context-utilization calculation
+_MODEL_CONTEXT_WINDOW = {
+    "claude-haiku-4-5-20251001": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-opus-4-8": 200_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+}
+
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
 _ANTHROPIC_TOOLS = [
@@ -104,6 +115,69 @@ def _safe_eval(expression: str) -> str:
         return f"error: {exc}"
 
 
+# ── Error helpers ─────────────────────────────────────────────────────────────
+
+_SERVER_ADDRESS = {
+    "anthropic": "api.anthropic.com",
+    "openai": "api.openai.com",
+}
+
+
+def _set_anthropic_cache_attrs(span, usage) -> None:
+    """Set prompt-cache token attributes from an Anthropic usage object."""
+    read = getattr(usage, "cache_read_input_tokens", None) or 0
+    created = getattr(usage, "cache_creation_input_tokens", None) or 0
+    if read:
+        span.set_attribute("gen_ai.usage.cache_read.input_tokens", read)
+    if created:
+        span.set_attribute("gen_ai.usage.cache_creation.input_tokens", created)
+
+
+def _set_response_attrs(
+    span,
+    resp_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+    system_prompt: str = "",
+) -> None:
+    """Set post-call response and usage attributes common to all providers."""
+    total = input_tokens + output_tokens
+    ctx_window = _MODEL_CONTEXT_WINDOW.get(model, 200_000)
+    utilization = round(input_tokens / ctx_window * 100, 4)
+    span.set_attribute("gen_ai.response.id", resp_id)
+    span.set_attribute("gen_ai.usage.total_tokens", total)
+    span.set_attribute("gen_ai.request.retry_count", 0)
+    span.set_attribute("gen_ai.cached_response", False)
+    span.set_attribute("gen_ai.request.context_utilization", utilization)
+    if system_prompt:
+        span.set_attribute("gen_ai.system_instructions", system_prompt)
+
+
+def _record_llm_error(exc: Exception) -> None:
+    """Set gen_ai.error.* and error.type on the current span from a provider exception."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        code = body.get("error", {}).get("type") or body.get("type") or ""
+        msg = body.get("error", {}).get("message") or body.get("message") or str(exc)
+    else:
+        code = ""
+        msg = str(exc)
+    if not code:
+        code = type(exc).__name__
+    error_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
+    span = _otel_trace.get_current_span()
+    span.set_attribute("gen_ai.system", PROVIDER)
+    span.set_attribute("gen_ai.provider.name", PROVIDER)
+    # gen_ai.operation.name satisfies the Section 1 population filter so
+    # gen_ai.error.code is counted even though the instrumentor's child span
+    # has already closed by the time our except block runs.
+    span.set_attribute("gen_ai.operation.name", "chat")
+    span.set_attribute("gen_ai.error.code", code)
+    span.set_attribute("gen_ai.error.message", msg)
+    span.set_attribute("error.type", error_type)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
@@ -142,43 +216,72 @@ def call_llm(
     top_p: float = 0.9,
 ) -> LLMResponse:
     """Call the configured LLM and return a normalized response."""
-    if PROVIDER == "anthropic":
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            temperature=temperature,
-            stop_sequences=["\n\nHuman:"],
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return LLMResponse(
-            content=resp.content[0].text,
-            model=resp.model,
-            input_tokens=resp.usage.input_tokens,
-            output_tokens=resp.usage.output_tokens,
-        )
-    elif PROVIDER == "openai":
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=1024,
-            temperature=temperature,
-            top_p=top_p,
-            stop=["\n\nHuman:"],
-            seed=42,
-            n=1,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return LLMResponse(
-            content=resp.choices[0].message.content,
-            model=resp.model,
-            input_tokens=resp.usage.prompt_tokens,
-            output_tokens=resp.usage.completion_tokens,
-        )
-    else:
-        raise ValueError(f"Unsupported PROVIDER in call_llm: {PROVIDER!r}")
+    try:
+        if PROVIDER == "anthropic":
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "anthropic")
+            cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.top_k", 40)
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
+            cur.set_attribute("server.address", "api.anthropic.com")
+            resp = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                temperature=temperature,
+                top_k=40,
+                stop_sequences=["\n\nHuman:"],
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            cur.set_attribute("gen_ai.output.type", "text")
+            _set_anthropic_cache_attrs(cur, resp.usage)
+            _set_response_attrs(cur, resp.id, resp.usage.input_tokens, resp.usage.output_tokens, model, system)
+            return LLMResponse(
+                content=resp.content[0].text,
+                model=resp.model,
+                input_tokens=resp.usage.input_tokens,
+                output_tokens=resp.usage.output_tokens,
+            )
+        elif PROVIDER == "openai":
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "openai")
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
+            cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
+            cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
+            cur.set_attribute("server.address", "api.openai.com")
+            resp = client.chat.completions.create(
+                model=model,
+                max_tokens=1024,
+                temperature=temperature,
+                top_p=top_p,
+                stop=["\n\nHuman:"],
+                seed=42,
+                n=1,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            cur.set_attribute("gen_ai.output.type", "text")
+            _set_response_attrs(cur, resp.id, resp.usage.prompt_tokens, resp.usage.completion_tokens, model, system)
+            return LLMResponse(
+                content=resp.choices[0].message.content,
+                model=resp.model,
+                input_tokens=resp.usage.prompt_tokens,
+                output_tokens=resp.usage.completion_tokens,
+            )
+        else:
+            raise ValueError(f"Unsupported PROVIDER in call_llm: {PROVIDER!r}")
+    except Exception as exc:
+        _record_llm_error(exc)
+        raise
 
 
 def call_llm_with_tools(
@@ -190,113 +293,129 @@ def call_llm_with_tools(
     top_p: float = 0.9,
 ) -> LLMResponse:
     """Call the LLM with a calculator tool definition, executing any tool calls."""
-    if PROVIDER == "anthropic":
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1024,
-            temperature=temperature,
-            stop_sequences=["\n\nHuman:"],
-            system=system,
-            tools=_ANTHROPIC_TOOLS,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        total_input = resp.usage.input_tokens
-        total_output = resp.usage.output_tokens
-
-        if resp.stop_reason == "tool_use":
-            tool_block = next(b for b in resp.content if b.type == "tool_use")
-            with _tracer.start_as_current_span("execute_tool") as tool_span:
-                tool_span.set_attribute("gen_ai.tool.name", tool_block.name)
-                tool_span.set_attribute("gen_ai.tool_call.id", tool_block.id)
-                tool_span.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
-                tool_span.set_attribute("gen_ai.tool.type", "function")
-                tool_result = _safe_eval(tool_block.input.get("expression", ""))
-
-            # Serialize content blocks to plain dicts — instrumentation wrappers
-            # can make SDK objects non-serializable when passed back to the API.
-            assistant_content = []
-            for block in resp.content:
-                if block.type == "tool_use":
-                    assistant_content.append(
-                        {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
-                    )
-                elif block.type == "text":
-                    assistant_content.append({"type": "text", "text": block.text})
-
-            resp2 = client.messages.create(
+    try:
+        if PROVIDER == "anthropic":
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "anthropic")
+            cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.top_k", 40)
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
+            cur.set_attribute("server.address", "api.anthropic.com")
+            resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
+                top_k=40,
                 stop_sequences=["\n\nHuman:"],
                 system=system,
                 tools=_ANTHROPIC_TOOLS,
-                messages=[
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": assistant_content},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_block.id,
-                                "content": tool_result,
-                            }
-                        ],
-                    },
-                ],
+                messages=[{"role": "user", "content": prompt}],
             )
-            total_input += resp2.usage.input_tokens
-            total_output += resp2.usage.output_tokens
-            text = next((b.text for b in resp2.content if b.type == "text"), "")
+            total_input = resp.usage.input_tokens
+            total_output = resp.usage.output_tokens
+
+            if resp.stop_reason == "tool_use":
+                tool_block = next(b for b in resp.content if b.type == "tool_use")
+                # Mark the current span as a gen_ai span so DT AI Obs indexes it,
+                # then set all tool attributes on it directly.
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.system", "anthropic")
+                cur.set_attribute("gen_ai.operation.name", "execute_tool")
+                cur.set_attribute("gen_ai.request.model", model)
+                cur.set_attribute("gen_ai.tool.name", tool_block.name)
+                cur.set_attribute("gen_ai.tool.call.id", tool_block.id)
+                cur.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
+                cur.set_attribute("gen_ai.tool.type", "function")
+                cur.set_attribute("gen_ai.tool.call.arguments", json.dumps(tool_block.input))
+                with _tracer.start_as_current_span("execute_tool") as tool_span:
+                    tool_span.set_attribute("gen_ai.system", "anthropic")
+                    tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
+                    tool_span.set_attribute("gen_ai.request.model", model)
+                    tool_span.set_attribute("gen_ai.tool.name", tool_block.name)
+                    tool_span.set_attribute("gen_ai.tool.call.id", tool_block.id)
+                    tool_span.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
+                    tool_span.set_attribute("gen_ai.tool.type", "function")
+                    tool_span.set_attribute("gen_ai.tool.call.arguments", json.dumps(tool_block.input))
+                    tool_result = _safe_eval(tool_block.input.get("expression", ""))
+                    tool_span.set_attribute("gen_ai.tool.call.result", tool_result)
+                cur.set_attribute("gen_ai.tool.call.result", tool_result)
+
+                # Serialize content blocks to plain dicts — instrumentation wrappers
+                # can make SDK objects non-serializable when passed back to the API.
+                assistant_content = []
+                for block in resp.content:
+                    if block.type == "tool_use":
+                        assistant_content.append(
+                            {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+                        )
+                    elif block.type == "text":
+                        assistant_content.append({"type": "text", "text": block.text})
+
+                resp2 = client.messages.create(
+                    model=model,
+                    max_tokens=1024,
+                    temperature=temperature,
+                    stop_sequences=["\n\nHuman:"],
+                    system=system,
+                    tools=_ANTHROPIC_TOOLS,
+                    messages=[
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": assistant_content},
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_block.id,
+                                    "content": tool_result,
+                                }
+                            ],
+                        },
+                    ],
+                )
+                total_input += resp2.usage.input_tokens
+                total_output += resp2.usage.output_tokens
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.output.type", "text")
+                _set_anthropic_cache_attrs(cur, resp.usage)
+                _set_response_attrs(cur, resp2.id, total_input, total_output, model, system)
+                text = next((b.text for b in resp2.content if b.type == "text"), "")
+                return LLMResponse(
+                    content=text,
+                    model=resp2.model,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.output.type", "text")
+            _set_anthropic_cache_attrs(cur, resp.usage)
+            _set_response_attrs(cur, resp.id, total_input, total_output, model, system)
+            text = next((b.text for b in resp.content if b.type == "text"), "")
             return LLMResponse(
                 content=text,
-                model=resp2.model,
+                model=resp.model,
                 input_tokens=total_input,
                 output_tokens=total_output,
             )
 
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        return LLMResponse(
-            content=text,
-            model=resp.model,
-            input_tokens=total_input,
-            output_tokens=total_output,
-        )
-
-    elif PROVIDER == "openai":
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ]
-        resp = client.chat.completions.create(
-            model=model,
-            max_tokens=1024,
-            temperature=temperature,
-            top_p=top_p,
-            stop=["\n\nHuman:"],
-            seed=42,
-            n=1,
-            tools=_OPENAI_TOOLS,
-            messages=messages,
-        )
-        total_input = resp.usage.prompt_tokens
-        total_output = resp.usage.completion_tokens
-
-        if resp.choices[0].finish_reason == "tool_calls":
-            tool_call = resp.choices[0].message.tool_calls[0]
-            args = json.loads(tool_call.function.arguments)
-            with _tracer.start_as_current_span("execute_tool") as tool_span:
-                tool_span.set_attribute("gen_ai.tool.name", tool_call.function.name)
-                tool_span.set_attribute("gen_ai.tool_call.id", tool_call.id)
-                tool_span.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
-                tool_span.set_attribute("gen_ai.tool.type", "function")
-                tool_result = _safe_eval(args.get("expression", ""))
-
-            messages.append(resp.choices[0].message)
-            messages.append(
-                {"role": "tool", "tool_call_id": tool_call.id, "content": tool_result}
-            )
-            resp2 = client.chat.completions.create(
+        elif PROVIDER == "openai":
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ]
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "openai")
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
+            cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
+            cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
+            cur.set_attribute("server.address", "api.openai.com")
+            resp = client.chat.completions.create(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
@@ -304,24 +423,80 @@ def call_llm_with_tools(
                 stop=["\n\nHuman:"],
                 seed=42,
                 n=1,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
                 tools=_OPENAI_TOOLS,
                 messages=messages,
             )
-            total_input += resp2.usage.prompt_tokens
-            total_output += resp2.usage.completion_tokens
+            total_input = resp.usage.prompt_tokens
+            total_output = resp.usage.completion_tokens
+
+            if resp.choices[0].finish_reason == "tool_calls":
+                tool_call = resp.choices[0].message.tool_calls[0]
+                args = json.loads(tool_call.function.arguments)
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.system", "openai")
+                cur.set_attribute("gen_ai.operation.name", "execute_tool")
+                cur.set_attribute("gen_ai.request.model", model)
+                cur.set_attribute("gen_ai.tool.name", tool_call.function.name)
+                cur.set_attribute("gen_ai.tool.call.id", tool_call.id)
+                cur.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
+                cur.set_attribute("gen_ai.tool.type", "function")
+                cur.set_attribute("gen_ai.tool.call.arguments", tool_call.function.arguments)
+                with _tracer.start_as_current_span("execute_tool") as tool_span:
+                    tool_span.set_attribute("gen_ai.system", "openai")
+                    tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
+                    tool_span.set_attribute("gen_ai.request.model", model)
+                    tool_span.set_attribute("gen_ai.tool.name", tool_call.function.name)
+                    tool_span.set_attribute("gen_ai.tool.call.id", tool_call.id)
+                    tool_span.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
+                    tool_span.set_attribute("gen_ai.tool.type", "function")
+                    tool_span.set_attribute("gen_ai.tool.call.arguments", tool_call.function.arguments)
+                    tool_result = _safe_eval(args.get("expression", ""))
+                    tool_span.set_attribute("gen_ai.tool.call.result", tool_result)
+                cur.set_attribute("gen_ai.tool.call.result", tool_result)
+
+                messages.append(resp.choices[0].message)
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call.id, "content": tool_result}
+                )
+                resp2 = client.chat.completions.create(
+                    model=model,
+                    max_tokens=1024,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stop=["\n\nHuman:"],
+                    seed=42,
+                    n=1,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
+                    tools=_OPENAI_TOOLS,
+                    messages=messages,
+                )
+                total_input += resp2.usage.prompt_tokens
+                total_output += resp2.usage.completion_tokens
+                cur2 = _otel_trace.get_current_span()
+                cur2.set_attribute("gen_ai.output.type", "text")
+                _set_response_attrs(cur2, resp2.id, total_input, total_output, model, system)
+                return LLMResponse(
+                    content=resp2.choices[0].message.content,
+                    model=resp2.model,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            cur2 = _otel_trace.get_current_span()
+            cur2.set_attribute("gen_ai.output.type", "text")
+            _set_response_attrs(cur2, resp.id, total_input, total_output, model, system)
             return LLMResponse(
-                content=resp2.choices[0].message.content,
-                model=resp2.model,
+                content=resp.choices[0].message.content,
+                model=resp.model,
                 input_tokens=total_input,
                 output_tokens=total_output,
             )
 
-        return LLMResponse(
-            content=resp.choices[0].message.content,
-            model=resp.model,
-            input_tokens=total_input,
-            output_tokens=total_output,
-        )
-
-    else:
-        raise ValueError(f"Unsupported PROVIDER in call_llm_with_tools: {PROVIDER!r}")
+        else:
+            raise ValueError(f"Unsupported PROVIDER in call_llm_with_tools: {PROVIDER!r}")
+    except Exception as exc:
+        _record_llm_error(exc)
+        raise

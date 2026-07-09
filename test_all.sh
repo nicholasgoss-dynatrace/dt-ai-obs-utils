@@ -109,7 +109,7 @@ PYEOF
 }
 
 run_tool_round() {
-    local prompt="What is 1234 * 5678 + 999? Also, how many seconds are in a leap year (366 days)?"
+    local prompt="What is 1234 * 5678 + 999?"
     local payload
     payload=$(make_tool_payload "$prompt")
 

@@ -16,6 +16,7 @@ Environment variables:
 """
 
 import asyncio
+import json
 import os
 import uuid
 
@@ -55,15 +56,11 @@ def _get_apps_endpoint() -> str:
 def _make_server_params() -> StdioServerParameters:
     apps_endpoint = _get_apps_endpoint()
     platform_token = os.environ.get("DT_PLATFORM_TOKEN", "")
+    env = {**os.environ, "DT_ENVIRONMENT": apps_endpoint, "DT_PLATFORM_TOKEN": platform_token}
     return StdioServerParameters(
         command="node",
-        args=["/usr/local/lib/node_modules/@dynatrace-oss/dynatrace-mcp-server/dist/index.js"],
-        env={
-            "DT_ENVIRONMENT": apps_endpoint,
-            "DT_PLATFORM_TOKEN": platform_token,
-            "DT_MCP_TOKEN_STORAGE": "file",
-            "PATH": os.environ.get("PATH", ""),
-        },
+        args=["/usr/lib/node_modules/@dynatrace-oss/dynatrace-mcp-server/index.js"],
+        env=env,
     )
 
 
@@ -74,8 +71,12 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
     server_params = _make_server_params()
 
     async with stdio_client(server_params) as (read, write):
+        session_id = str(uuid.uuid4())
+        _otel_trace.get_current_span().set_attribute("mcp.session.id", session_id)
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init_result = await session.initialize()
+            protocol_version = getattr(init_result, "protocolVersion", "unknown")
+            _otel_trace.get_current_span().set_attribute("mcp.protocol.version", protocol_version)
 
             # List available tools and build Anthropic tool definitions
             tools_result = await session.list_tools()
@@ -131,14 +132,30 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
                         continue
 
                     request_id = str(uuid.uuid4())
+                    apps_endpoint = _get_apps_endpoint()
+                    resource_uri = f"{apps_endpoint}/api/mcp/tools/{block.name}"
                     with _tracer.start_as_current_span("mcp.tool.call") as span:
                         span.set_attribute("mcp.method.name", "tools/call")
                         span.set_attribute("mcp.server.name", "dynatrace")
+                        span.set_attribute("mcp.client.name", "dt-ai-obs-utils")
                         span.set_attribute("mcp.transport", "stdio")
                         span.set_attribute("mcp.tool.name", block.name)
                         span.set_attribute("mcp.request.id", request_id)
+                        span.set_attribute("mcp.session.id", session_id)
+                        span.set_attribute("mcp.protocol.version", protocol_version)
+                        span.set_attribute("mcp.resource.uri", resource_uri)
 
                         tool_response = await session.call_tool(block.name, block.input)
+
+                        is_error = bool(getattr(tool_response, "isError", False))
+                        span.set_attribute("mcp.is_error", is_error)
+
+                        # Capture response value for audit visibility
+                        response_items = [
+                            (item.text if hasattr(item, "text") else str(item))
+                            for item in tool_response.content
+                        ]
+                        span.set_attribute("mcp.response.value", json.dumps(response_items)[:2048])
 
                     # Extract text from tool result content items
                     result_text = ""

@@ -85,6 +85,7 @@ exporter = OTLPSpanExporter(
     headers={"Authorization": f"Api-Token {DT_API_TOKEN}"},
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(tracer_provider)
 
 # Load the OpenInference instrumentor for the configured provider
 if llm_client.PROVIDER == "anthropic":
@@ -138,10 +139,17 @@ def ask(req: AskRequest) -> AskResponse:
     logger.info("ask request received prompt_length=%d provider=%s use_tools=%s use_mcp=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, req.use_mcp, conversation_id)
     span = trace.get_current_span()
     span.set_attribute("gen_ai.conversation.id", conversation_id)
+    span.set_attribute("session.id", conversation_id)
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.description", "AI Observability evaluation assistant (OpenInference)")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.agent.type", "chat_completion")
+    span.set_attribute("gen_ai.agent.iteration", 1)
+    span.set_attribute("gen_ai.agent.max_iterations", 1)
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
+    span.set_attribute("gen_ai.workflow.name", "ask_question")
+    span.set_attribute("gen_ai.conversation.compacted", False)
     try:
         if req.use_mcp:
             resp = mcp_client.call_llm_with_mcp(client, req.model or MODEL, req.prompt)
@@ -152,6 +160,7 @@ def ask(req: AskRequest) -> AskResponse:
     except Exception as exc:
         span = trace.get_current_span()
         span.set_attribute("exception.type", type(exc).__qualname__)
+        span.set_attribute("error.type", f"{type(exc).__module__}.{type(exc).__qualname__}")
         span.record_exception(exc)
         raise
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
