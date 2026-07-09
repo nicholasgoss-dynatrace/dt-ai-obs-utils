@@ -136,6 +136,7 @@ def call_llm(
     system: str = "You are a concise technical assistant.",
     temperature: float = 0.7,
     top_p: float = 0.9,
+    seed: int = 42,
 ) -> LLMResponse:
     """Call the configured LLM and return a normalized response."""
     if PROVIDER == "anthropic":
@@ -145,6 +146,7 @@ def call_llm(
             temperature=temperature,
             top_p=top_p,
             stop_sequences=["\n\nHuman:"],
+            seed=seed,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -161,6 +163,8 @@ def call_llm(
             temperature=temperature,
             top_p=top_p,
             stop=["\n\nHuman:"],
+            seed=seed,
+            n=1,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -183,6 +187,7 @@ def call_llm_with_tools(
     system: str = _TOOL_SYSTEM,
     temperature: float = 0.7,
     top_p: float = 0.9,
+    seed: int = 42,
 ) -> LLMResponse:
     """Call the LLM with a calculator tool definition, executing any tool calls."""
     if PROVIDER == "anthropic":
@@ -192,6 +197,7 @@ def call_llm_with_tools(
             temperature=temperature,
             top_p=top_p,
             stop_sequences=["\n\nHuman:"],
+            seed=seed,
             system=system,
             tools=_ANTHROPIC_TOOLS,
             messages=[{"role": "user", "content": prompt}],
@@ -220,6 +226,7 @@ def call_llm_with_tools(
                 temperature=temperature,
                 top_p=top_p,
                 stop_sequences=["\n\nHuman:"],
+                seed=seed,
                 system=system,
                 tools=_ANTHROPIC_TOOLS,
                 messages=[
@@ -266,6 +273,8 @@ def call_llm_with_tools(
             temperature=temperature,
             top_p=top_p,
             stop=["\n\nHuman:"],
+            seed=seed,
+            n=1,
             tools=_OPENAI_TOOLS,
             messages=messages,
         )
@@ -287,6 +296,8 @@ def call_llm_with_tools(
                 temperature=temperature,
                 top_p=top_p,
                 stop=["\n\nHuman:"],
+                seed=seed,
+                n=1,
                 tools=_OPENAI_TOOLS,
                 messages=messages,
             )
