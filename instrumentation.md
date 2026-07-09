@@ -82,12 +82,15 @@ Host OneAgent daemon
 ```
 POST /ask  (FastAPI HTTP span — OneAgent FastAPI sensor)
 └── anthropic.messages.create  (LLM span — OneAgent Anthropic sensor)
-      gen_ai.system              = anthropic
-      gen_ai.request.model       = claude-haiku-4-5-20251001
-      gen_ai.usage.input_tokens  = 20
-      gen_ai.usage.output_tokens = 225
-      gen_ai.prompt              = "What is observability?"  (requires feature flag)
-      gen_ai.completion          = "Observability is..."     (requires feature flag)
+      gen_ai.system                        = anthropic
+      gen_ai.operation.name                = chat
+      gen_ai.request.model                 = claude-haiku-4-5-20251001
+      gen_ai.response.model                = claude-haiku-4-5-20251001
+      gen_ai.usage.input_tokens            = 20
+      gen_ai.usage.output_tokens           = 225
+      gen_ai.usage.cache_read.input_tokens = 0   (Anthropic prompt caching)
+      gen_ai.input.messages                = [{"role": "user", ...}]   (requires feature flag)
+      gen_ai.output.messages               = [{"role": "assistant", ...}]   (requires feature flag)
 ```
 
 The HTTP span provides the entry point context. Without FastAPI sensor enabled, LLM spans have no parent and may not surface correctly in AI Observability Explorer.
@@ -157,12 +160,19 @@ POST /ask  (HTTP server span — FastAPIInstrumentor)
 └── ask_question  (workflow span — @workflow decorator)
     └── call_llm  (task span — @task decorator)
         └── anthropic.chat  (LLM span — auto-instrumented by traceloop-sdk)
-              gen_ai.system              = anthropic
-              gen_ai.request.model       = claude-haiku-4-5-20251001
-              gen_ai.usage.input_tokens  = 20
-              gen_ai.usage.output_tokens = 225
-              gen_ai.input.messages      = [{"role": "user", "parts": [...]}]
-              gen_ai.output.messages     = [{"role": "assistant", "parts": [...]}]
+              gen_ai.system                          = anthropic
+              gen_ai.operation.name                  = chat
+              gen_ai.request.model                   = claude-haiku-4-5-20251001
+              gen_ai.response.model                  = claude-haiku-4-5-20251001
+              gen_ai.response.id                     = msg_...
+              gen_ai.usage.input_tokens              = 20
+              gen_ai.usage.output_tokens             = 225
+              gen_ai.usage.cache_read.input_tokens   = 0   (Anthropic prompt caching)
+              gen_ai.usage.cache_creation.input_tokens = 0
+              gen_ai.usage.reasoning.output_tokens   = 0   (extended thinking)
+              gen_ai.response.finish_reasons         = ["end_turn"]
+              gen_ai.input.messages                  = [{"role": "user", "parts": [...]}]
+              gen_ai.output.messages                 = [{"role": "assistant", "parts": [...]}]
 ```
 
 The HTTP entry span is required for Dynatrace to compute throughput and failure rate in the Service view. The workflow → task → LLM hierarchy beneath it is the key differentiator from the other methods. It mirrors how a real agent application would be structured: a named workflow (an agent run) containing tasks (reasoning steps) each of which may call an LLM one or more times.
@@ -254,8 +264,12 @@ processors:
     trace_statements:
       - context: span
         statements:
-          - set(attributes["gen_ai.operation.kind"], "chat")
+          - set(attributes["gen_ai.operation.name"], "chat")
               where attributes["openinference.span.kind"] == "LLM"
+          - set(attributes["gen_ai.operation.name"], "execute_tool")
+              where attributes["openinference.span.kind"] == "TOOL"
+          - set(attributes["gen_ai.operation.name"], "execute_agent")
+              where attributes["openinference.span.kind"] == "AGENT"
           - set(attributes["gen_ai.request.model"], attributes["llm.model_name"])
               where attributes["llm.model_name"] != nil
           - set(attributes["gen_ai.usage.input_tokens"],  attributes["llm.token_count.prompt"])
@@ -270,9 +284,10 @@ processors:
 ```
 POST /ask  (HTTP server span — FastAPIInstrumentor)
 └── messages.create  (LLM span — OpenInference conventions, normalized by Collector)
-  gen_ai.operation.kind      = chat                     ← normalized
+  gen_ai.operation.name      = chat                     ← normalized
   gen_ai.system              = anthropic                ← normalized
   gen_ai.request.model       = claude-haiku-4-5-20251001
+  gen_ai.response.model      = claude-haiku-4-5-20251001  ← normalized
   gen_ai.usage.input_tokens  = 20
   gen_ai.usage.output_tokens = 225
   gen_ai.input.messages      = {...}                    ← normalized from input.value
@@ -314,13 +329,22 @@ The same LLM call concept expressed in each convention:
 
 | Concept | OneAgent | OpenLLMetry | OpenInference (raw) | After normalization |
 |---|---|---|---|---|
-| Model name | `gen_ai.request.model` | `gen_ai.request.model` | `llm.model_name` | `gen_ai.request.model` |
+| Operation | `gen_ai.operation.name` | `gen_ai.operation.name` | `openinference.span.kind` | `gen_ai.operation.name` |
+| Provider | `gen_ai.system` | `gen_ai.system` | `llm.provider` / `llm.system` | `gen_ai.system` |
+| Request model | `gen_ai.request.model` | `gen_ai.request.model` | `llm.model_name` | `gen_ai.request.model` |
+| Response model | `gen_ai.response.model` | `gen_ai.response.model` | *(absent)* | `gen_ai.response.model` |
+| Response ID | `gen_ai.response.id` | `gen_ai.response.id` | *(absent)* | *(absent)* |
 | Input tokens | `gen_ai.usage.input_tokens` | `gen_ai.usage.input_tokens` | `llm.token_count.prompt` | `gen_ai.usage.input_tokens` |
 | Output tokens | `gen_ai.usage.output_tokens` | `gen_ai.usage.output_tokens` | `llm.token_count.completion` | `gen_ai.usage.output_tokens` |
-| Prompt content | `gen_ai.prompt` | `gen_ai.input.messages` | `input.value` | `gen_ai.input.messages` |
-| Response content | `gen_ai.completion` | `gen_ai.output.messages` | `output.value` | `gen_ai.output.messages` |
-| Span kind | *(inferred)* | `gen_ai.operation.kind` | `openinference.span.kind` | `gen_ai.operation.kind` |
-| Provider | `gen_ai.system` | `gen_ai.system` | `llm.provider` / `llm.system` | `gen_ai.system` |
+| Cache read tokens | `gen_ai.usage.cache_read.input_tokens` | `gen_ai.usage.cache_read.input_tokens` | *(absent)* | *(absent)* |
+| Cache write tokens | `gen_ai.usage.cache_creation.input_tokens` | `gen_ai.usage.cache_creation.input_tokens` | *(absent)* | *(absent)* |
+| Reasoning tokens | `gen_ai.usage.reasoning.output_tokens` | `gen_ai.usage.reasoning.output_tokens` | *(absent)* | *(absent)* |
+| Finish reasons | `gen_ai.response.finish_reasons` | `gen_ai.response.finish_reasons` | `llm.finish_reason` | `gen_ai.response.finish_reasons` |
+| Prompt content | `gen_ai.input.messages` *(opt-in)* | `gen_ai.input.messages` | `input.value` | `gen_ai.input.messages` |
+| Response content | `gen_ai.output.messages` *(opt-in)* | `gen_ai.output.messages` | `output.value` | `gen_ai.output.messages` |
+| Temperature | `gen_ai.request.temperature` | `gen_ai.request.temperature` | `llm.temperature` | `gen_ai.request.temperature` |
+| Max tokens | `gen_ai.request.max_tokens` | `gen_ai.request.max_tokens` | `llm.max_tokens` | `gen_ai.request.max_tokens` |
+| Reasoning level | `gen_ai.request.reasoning.level` | `gen_ai.request.reasoning.level` | *(absent)* | *(absent)* |
 
 ---
 
