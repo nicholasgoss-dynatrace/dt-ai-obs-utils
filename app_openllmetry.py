@@ -95,7 +95,9 @@ def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
         else:
             resp = llm_client.call_llm(client, model, prompt)
     except Exception as exc:
-        trace.get_current_span().record_exception(exc)
+        span = trace.get_current_span()
+        span.set_attribute("exception.type", type(exc).__qualname__)
+        span.record_exception(exc)
         raise
     return {
         "content": resp.content,

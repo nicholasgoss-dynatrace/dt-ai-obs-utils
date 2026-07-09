@@ -146,7 +146,9 @@ def ask(req: AskRequest) -> AskResponse:
         else:
             resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
     except Exception as exc:
-        trace.get_current_span().record_exception(exc)
+        span = trace.get_current_span()
+        span.set_attribute("exception.type", type(exc).__qualname__)
+        span.record_exception(exc)
         raise
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
