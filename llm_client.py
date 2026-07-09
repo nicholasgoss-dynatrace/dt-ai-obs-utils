@@ -108,7 +108,6 @@ def _safe_eval(expression: str) -> str:
 
 def _record_llm_error(exc: Exception) -> None:
     """Set gen_ai.error.code on the current span from a provider exception."""
-    # Anthropic and OpenAI exceptions expose the provider error type in .body
     body = getattr(exc, "body", None)
     if isinstance(body, dict):
         code = body.get("error", {}).get("type") or body.get("type") or ""
@@ -116,7 +115,9 @@ def _record_llm_error(exc: Exception) -> None:
         code = ""
     if not code:
         code = type(exc).__name__
-    _otel_trace.get_current_span().set_attribute("gen_ai.error.code", code)
+    span = _otel_trace.get_current_span()
+    span.set_attribute("gen_ai.system", PROVIDER)
+    span.set_attribute("gen_ai.error.code", code)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ def call_llm(
     """Call the configured LLM and return a normalized response."""
     try:
         if PROVIDER == "anthropic":
+            _otel_trace.get_current_span().set_attribute("gen_ai.request.top_p", top_p)
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -211,6 +213,7 @@ def call_llm_with_tools(
     """Call the LLM with a calculator tool definition, executing any tool calls."""
     try:
         if PROVIDER == "anthropic":
+            _otel_trace.get_current_span().set_attribute("gen_ai.request.top_p", top_p)
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -225,11 +228,15 @@ def call_llm_with_tools(
 
             if resp.stop_reason == "tool_use":
                 tool_block = next(b for b in resp.content if b.type == "tool_use")
-                # Set on the current (parent) span so DT AI Obs can index them
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.name", tool_block.name)
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool_call.id", tool_block.id)
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.type", "function")
+                # Mark the current span as a gen_ai span so DT AI Obs indexes it,
+                # then set all tool attributes on it directly.
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.system", "anthropic")
+                cur.set_attribute("gen_ai.operation.name", "execute_tool")
+                cur.set_attribute("gen_ai.tool.name", tool_block.name)
+                cur.set_attribute("gen_ai.tool_call.id", tool_block.id)
+                cur.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
+                cur.set_attribute("gen_ai.tool.type", "function")
                 with _tracer.start_as_current_span("execute_tool") as tool_span:
                     tool_span.set_attribute("gen_ai.system", "anthropic")
                     tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -312,10 +319,13 @@ def call_llm_with_tools(
             if resp.choices[0].finish_reason == "tool_calls":
                 tool_call = resp.choices[0].message.tool_calls[0]
                 args = json.loads(tool_call.function.arguments)
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.name", tool_call.function.name)
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool_call.id", tool_call.id)
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
-                _otel_trace.get_current_span().set_attribute("gen_ai.tool.type", "function")
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.system", "openai")
+                cur.set_attribute("gen_ai.operation.name", "execute_tool")
+                cur.set_attribute("gen_ai.tool.name", tool_call.function.name)
+                cur.set_attribute("gen_ai.tool_call.id", tool_call.id)
+                cur.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
+                cur.set_attribute("gen_ai.tool.type", "function")
                 with _tracer.start_as_current_span("execute_tool") as tool_span:
                     tool_span.set_attribute("gen_ai.system", "openai")
                     tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
