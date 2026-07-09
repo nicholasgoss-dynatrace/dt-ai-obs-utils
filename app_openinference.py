@@ -131,6 +131,11 @@ class AskResponse(BaseModel):
 def ask(req: AskRequest) -> AskResponse:
     """OpenInference instrumentor auto-records the LLM span on every client call."""
     logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    span = trace.get_current_span()
+    span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
+    span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     try:
         if req.use_tools:
             resp = llm_client.call_llm_with_tools(client, req.model or MODEL, req.prompt)

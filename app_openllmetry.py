@@ -105,6 +105,11 @@ def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
 
 @workflow(name="ask_question")
 def ask_question(prompt: str, model: str, use_tools: bool = False) -> dict:
+    span = trace.get_current_span()
+    span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openllmetry-001")
+    span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     return call_llm_task(prompt, model, use_tools)
 
 
