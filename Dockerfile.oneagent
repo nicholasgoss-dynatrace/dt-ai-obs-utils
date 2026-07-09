@@ -1,7 +1,11 @@
 FROM python:3.11-slim
 
 # wget needed to download the OneAgent installer at container startup
-RUN apt-get update && apt-get install -y --no-install-recommends wget \
+# curl + Node.js 24 + dynatrace-mcp-server for MCP tool-use support
+RUN apt-get update && apt-get install -y --no-install-recommends wget curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @dynatrace-oss/dynatrace-mcp-server \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -11,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements_oneagent.txt
 
 COPY app_oneagent.py .
 COPY llm_client.py .
+COPY mcp_client.py .
 COPY log_setup.py .
 COPY docker-entrypoint-oneagent.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

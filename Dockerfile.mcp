@@ -8,14 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg \
 
 WORKDIR /app
 
-COPY requirements_openllmetry.txt .
-RUN pip install --no-cache-dir -r requirements_openllmetry.txt
+COPY requirements_mcp.txt .
+RUN pip install --no-cache-dir -r requirements_mcp.txt
 
-COPY app_openllmetry.py .
+COPY app_mcp.py .
 COPY llm_client.py .
 COPY mcp_client.py .
 COPY log_setup.py .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app_openllmetry:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app_mcp:app", "--host", "0.0.0.0", "--port", "8000"]

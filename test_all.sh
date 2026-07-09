@@ -63,6 +63,10 @@ make_tool_payload() {
     python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'use_tools': True}))" "$1"
 }
 
+make_mcp_payload() {
+    python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'use_mcp': True}))" "$1"
+}
+
 call_service() {
     local name="$1"
     local port="$2"
@@ -121,6 +125,28 @@ run_tool_round() {
     wait
     echo ""
     echo "  Verify in Dynatrace: LLM spans should carry gen_ai.tool.name and tool call events."
+}
+
+run_mcp_round() {
+    local prompt="What are the currently active problems in this Dynatrace environment? Summarize briefly."
+    local mcp_payload plain_payload
+    mcp_payload=$(make_mcp_payload "$prompt")
+    plain_payload=$(make_payload "$prompt")
+
+    echo ""
+    printf "  ── MCP round ────────────────────────────────────────────────────────────\n"
+    echo ""
+    echo "  [MCP]       Dynatrace tools invoked via MCP stdio transport"
+    printf "  Prompt: \"%s\"\n" "${prompt:0:90}"
+
+    # Services 1-3 use use_mcp=true; service 4 (port 8004) always uses MCP internally
+    call_service "OneAgent"      8001 "$mcp_payload" &
+    call_service "OpenLLMetry"   8002 "$mcp_payload" &
+    call_service "OpenInference" 8003 "$mcp_payload" &
+    call_service "MCP"           8004 "$plain_payload" &
+    wait
+    echo ""
+    echo "  Verify in Dynatrace: spans should carry mcp.tool.name and mcp.server.name attributes."
 }
 
 run_error_round() {
@@ -185,6 +211,9 @@ else
 
     sleep 2
     run_tool_round
+
+    sleep 2
+    run_mcp_round
 
     sleep 2
     run_error_round
