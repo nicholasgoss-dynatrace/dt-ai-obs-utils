@@ -127,6 +127,10 @@ def _record_llm_error(exc: Exception) -> None:
     span = _otel_trace.get_current_span()
     span.set_attribute("gen_ai.system", PROVIDER)
     span.set_attribute("gen_ai.provider.name", PROVIDER)
+    # gen_ai.operation.name satisfies the Section 1 population filter so
+    # gen_ai.error.code is counted even though the instrumentor's child span
+    # has already closed by the time our except block runs.
+    span.set_attribute("gen_ai.operation.name", "chat")
     span.set_attribute("gen_ai.error.code", code)
     span.set_attribute("gen_ai.error.message", msg)
     span.set_attribute("error.type", error_type)
