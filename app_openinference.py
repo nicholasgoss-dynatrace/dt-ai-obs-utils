@@ -139,12 +139,17 @@ def ask(req: AskRequest) -> AskResponse:
     logger.info("ask request received prompt_length=%d provider=%s use_tools=%s use_mcp=%s conversation_id=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools, req.use_mcp, conversation_id)
     span = trace.get_current_span()
     span.set_attribute("gen_ai.conversation.id", conversation_id)
+    span.set_attribute("session.id", conversation_id)
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
     span.set_attribute("gen_ai.agent.description", "AI Observability evaluation assistant (OpenInference)")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.agent.type", "chat_completion")
+    span.set_attribute("gen_ai.agent.iteration", 1)
+    span.set_attribute("gen_ai.agent.max_iterations", 1)
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     span.set_attribute("gen_ai.workflow.name", "ask_question")
+    span.set_attribute("gen_ai.conversation.compacted", False)
     try:
         if req.use_mcp:
             resp = mcp_client.call_llm_with_mcp(client, req.model or MODEL, req.prompt)

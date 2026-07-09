@@ -27,6 +27,17 @@ _MODEL_DEFAULTS = {
     "openai": "gpt-4o-mini",
 }
 
+# Context window sizes for context-utilization calculation
+_MODEL_CONTEXT_WINDOW = {
+    "claude-haiku-4-5-20251001": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-sonnet-4-5": 200_000,
+    "claude-opus-4-8": 200_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+}
+
 # ── Tool definitions ──────────────────────────────────────────────────────────
 
 _ANTHROPIC_TOOLS = [
@@ -122,6 +133,27 @@ def _set_anthropic_cache_attrs(span, usage) -> None:
         span.set_attribute("gen_ai.usage.cache_creation.input_tokens", created)
 
 
+def _set_response_attrs(
+    span,
+    resp_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+    system_prompt: str = "",
+) -> None:
+    """Set post-call response and usage attributes common to all providers."""
+    total = input_tokens + output_tokens
+    ctx_window = _MODEL_CONTEXT_WINDOW.get(model, 200_000)
+    utilization = round(input_tokens / ctx_window * 100, 4)
+    span.set_attribute("gen_ai.response.id", resp_id)
+    span.set_attribute("gen_ai.usage.total_tokens", total)
+    span.set_attribute("gen_ai.request.retry_count", 0)
+    span.set_attribute("gen_ai.cached_response", False)
+    span.set_attribute("gen_ai.request.context_utilization", utilization)
+    if system_prompt:
+        span.set_attribute("gen_ai.system_instructions", system_prompt)
+
+
 def _record_llm_error(exc: Exception) -> None:
     """Set gen_ai.error.* and error.type on the current span from a provider exception."""
     body = getattr(exc, "body", None)
@@ -189,19 +221,23 @@ def call_llm(
             cur = _otel_trace.get_current_span()
             cur.set_attribute("gen_ai.provider.name", "anthropic")
             cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.top_k", 40)
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
             cur.set_attribute("server.address", "api.anthropic.com")
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
+                top_k=40,
                 stop_sequences=["\n\nHuman:"],
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
             cur.set_attribute("gen_ai.output.type", "text")
             _set_anthropic_cache_attrs(cur, resp.usage)
+            _set_response_attrs(cur, resp.id, resp.usage.input_tokens, resp.usage.output_tokens, model, system)
             return LLMResponse(
                 content=resp.content[0].text,
                 model=resp.model,
@@ -213,6 +249,7 @@ def call_llm(
             cur.set_attribute("gen_ai.provider.name", "openai")
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
             cur.set_attribute("gen_ai.request.seed", 42)
             cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
             cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
@@ -233,6 +270,7 @@ def call_llm(
                 ],
             )
             cur.set_attribute("gen_ai.output.type", "text")
+            _set_response_attrs(cur, resp.id, resp.usage.prompt_tokens, resp.usage.completion_tokens, model, system)
             return LLMResponse(
                 content=resp.choices[0].message.content,
                 model=resp.model,
@@ -260,13 +298,16 @@ def call_llm_with_tools(
             cur = _otel_trace.get_current_span()
             cur.set_attribute("gen_ai.provider.name", "anthropic")
             cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.top_k", 40)
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
             cur.set_attribute("server.address", "api.anthropic.com")
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
+                top_k=40,
                 stop_sequences=["\n\nHuman:"],
                 system=system,
                 tools=_ANTHROPIC_TOOLS,
@@ -339,6 +380,7 @@ def call_llm_with_tools(
                 cur = _otel_trace.get_current_span()
                 cur.set_attribute("gen_ai.output.type", "text")
                 _set_anthropic_cache_attrs(cur, resp.usage)
+                _set_response_attrs(cur, resp2.id, total_input, total_output, model, system)
                 text = next((b.text for b in resp2.content if b.type == "text"), "")
                 return LLMResponse(
                     content=text,
@@ -350,6 +392,7 @@ def call_llm_with_tools(
             cur = _otel_trace.get_current_span()
             cur.set_attribute("gen_ai.output.type", "text")
             _set_anthropic_cache_attrs(cur, resp.usage)
+            _set_response_attrs(cur, resp.id, total_input, total_output, model, system)
             text = next((b.text for b in resp.content if b.type == "text"), "")
             return LLMResponse(
                 content=text,
@@ -367,6 +410,7 @@ def call_llm_with_tools(
             cur.set_attribute("gen_ai.provider.name", "openai")
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.is_stream", False)
             cur.set_attribute("gen_ai.request.seed", 42)
             cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
             cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
@@ -431,7 +475,9 @@ def call_llm_with_tools(
                 )
                 total_input += resp2.usage.prompt_tokens
                 total_output += resp2.usage.completion_tokens
-                _otel_trace.get_current_span().set_attribute("gen_ai.output.type", "text")
+                cur2 = _otel_trace.get_current_span()
+                cur2.set_attribute("gen_ai.output.type", "text")
+                _set_response_attrs(cur2, resp2.id, total_input, total_output, model, system)
                 return LLMResponse(
                     content=resp2.choices[0].message.content,
                     model=resp2.model,
@@ -439,7 +485,9 @@ def call_llm_with_tools(
                     output_tokens=total_output,
                 )
 
-            _otel_trace.get_current_span().set_attribute("gen_ai.output.type", "text")
+            cur2 = _otel_trace.get_current_span()
+            cur2.set_attribute("gen_ai.output.type", "text")
+            _set_response_attrs(cur2, resp.id, total_input, total_output, model, system)
             return LLMResponse(
                 content=resp.choices[0].message.content,
                 model=resp.model,

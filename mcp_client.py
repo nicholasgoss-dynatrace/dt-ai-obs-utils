@@ -16,6 +16,7 @@ Environment variables:
 """
 
 import asyncio
+import json
 import os
 import uuid
 
@@ -136,6 +137,7 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
                     with _tracer.start_as_current_span("mcp.tool.call") as span:
                         span.set_attribute("mcp.method.name", "tools/call")
                         span.set_attribute("mcp.server.name", "dynatrace")
+                        span.set_attribute("mcp.client.name", "dt-ai-obs-utils")
                         span.set_attribute("mcp.transport", "stdio")
                         span.set_attribute("mcp.tool.name", block.name)
                         span.set_attribute("mcp.request.id", request_id)
@@ -147,6 +149,13 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
 
                         is_error = bool(getattr(tool_response, "isError", False))
                         span.set_attribute("mcp.is_error", is_error)
+
+                        # Capture response value for audit visibility
+                        response_items = [
+                            (item.text if hasattr(item, "text") else str(item))
+                            for item in tool_response.content
+                        ]
+                        span.set_attribute("mcp.response.value", json.dumps(response_items)[:2048])
 
                     # Extract text from tool result content items
                     result_text = ""

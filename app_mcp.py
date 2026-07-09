@@ -114,12 +114,17 @@ def ask(req: AskRequest) -> AskResponse:
     )
     span = trace.get_current_span()
     span.set_attribute("gen_ai.conversation.id", conversation_id)
+    span.set_attribute("session.id", conversation_id)
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-mcp-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
     span.set_attribute("gen_ai.agent.description", "AI Observability evaluation assistant (MCP)")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
+    span.set_attribute("gen_ai.agent.type", "chat_completion")
+    span.set_attribute("gen_ai.agent.iteration", 1)
+    span.set_attribute("gen_ai.agent.max_iterations", 1)
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     span.set_attribute("gen_ai.workflow.name", "ask_question")
+    span.set_attribute("gen_ai.conversation.compacted", False)
 
     try:
         resp = mcp_client.call_llm_with_mcp(client, req.model or MODEL, req.prompt)
