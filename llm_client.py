@@ -195,6 +195,17 @@ def call_llm_with_tools(
             tool_block = next(b for b in resp.content if b.type == "tool_use")
             tool_result = _safe_eval(tool_block.input.get("expression", ""))
 
+            # Serialize content blocks to plain dicts — instrumentation wrappers
+            # can make SDK objects non-serializable when passed back to the API.
+            assistant_content = []
+            for block in resp.content:
+                if block.type == "tool_use":
+                    assistant_content.append(
+                        {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+                    )
+                elif block.type == "text":
+                    assistant_content.append({"type": "text", "text": block.text})
+
             resp2 = client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -203,7 +214,7 @@ def call_llm_with_tools(
                 tools=_ANTHROPIC_TOOLS,
                 messages=[
                     {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": resp.content},
+                    {"role": "assistant", "content": assistant_content},
                     {
                         "role": "user",
                         "content": [
