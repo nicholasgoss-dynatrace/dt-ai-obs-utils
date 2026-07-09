@@ -101,6 +101,7 @@ def call_llm_task(prompt: str, model: str, use_tools: bool = False, use_mcp: boo
     except Exception as exc:
         span = trace.get_current_span()
         span.set_attribute("exception.type", type(exc).__qualname__)
+        span.set_attribute("error.type", f"{type(exc).__module__}.{type(exc).__qualname__}")
         span.record_exception(exc)
         raise
     return {
@@ -116,9 +117,11 @@ def ask_question(prompt: str, model: str, use_tools: bool = False, use_mcp: bool
     span = trace.get_current_span()
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openllmetry-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.description", "AI Observability evaluation assistant (OpenLLMetry)")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
     span.set_attribute("gen_ai.conversation.id", conversation_id)
+    span.set_attribute("gen_ai.workflow.name", "ask_question")
     return call_llm_task(prompt, model, use_tools, use_mcp)
 
 

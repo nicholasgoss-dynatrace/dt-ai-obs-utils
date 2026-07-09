@@ -141,8 +141,10 @@ def ask(req: AskRequest) -> AskResponse:
     span.set_attribute("gen_ai.conversation.id", conversation_id)
     span.set_attribute("gen_ai.agent.id", "dt-ai-obs-openinference-001")
     span.set_attribute("gen_ai.agent.name", "dt-ai-obs-assistant")
+    span.set_attribute("gen_ai.agent.description", "AI Observability evaluation assistant (OpenInference)")
     span.set_attribute("gen_ai.agent.version", "0.1.5")
     span.set_attribute("gen_ai.memory.store.id", "in-memory-context-store")
+    span.set_attribute("gen_ai.workflow.name", "ask_question")
     try:
         if req.use_mcp:
             resp = mcp_client.call_llm_with_mcp(client, req.model or MODEL, req.prompt)
@@ -153,6 +155,7 @@ def ask(req: AskRequest) -> AskResponse:
     except Exception as exc:
         span = trace.get_current_span()
         span.set_attribute("exception.type", type(exc).__qualname__)
+        span.set_attribute("error.type", f"{type(exc).__module__}.{type(exc).__qualname__}")
         span.record_exception(exc)
         raise
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)

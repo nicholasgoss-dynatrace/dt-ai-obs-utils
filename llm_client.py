@@ -106,18 +106,30 @@ def _safe_eval(expression: str) -> str:
 
 # ── Error helpers ─────────────────────────────────────────────────────────────
 
+_SERVER_ADDRESS = {
+    "anthropic": "api.anthropic.com",
+    "openai": "api.openai.com",
+}
+
+
 def _record_llm_error(exc: Exception) -> None:
-    """Set gen_ai.error.code on the current span from a provider exception."""
+    """Set gen_ai.error.* and error.type on the current span from a provider exception."""
     body = getattr(exc, "body", None)
     if isinstance(body, dict):
         code = body.get("error", {}).get("type") or body.get("type") or ""
+        msg = body.get("error", {}).get("message") or body.get("message") or str(exc)
     else:
         code = ""
+        msg = str(exc)
     if not code:
         code = type(exc).__name__
+    error_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
     span = _otel_trace.get_current_span()
     span.set_attribute("gen_ai.system", PROVIDER)
+    span.set_attribute("gen_ai.provider.name", PROVIDER)
     span.set_attribute("gen_ai.error.code", code)
+    span.set_attribute("gen_ai.error.message", msg)
+    span.set_attribute("error.type", error_type)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -160,7 +172,12 @@ def call_llm(
     """Call the configured LLM and return a normalized response."""
     try:
         if PROVIDER == "anthropic":
-            _otel_trace.get_current_span().set_attribute("gen_ai.request.top_p", top_p)
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "anthropic")
+            cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("server.address", "api.anthropic.com")
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -176,6 +193,12 @@ def call_llm(
                 output_tokens=resp.usage.output_tokens,
             )
         elif PROVIDER == "openai":
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "openai")
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("server.address", "api.openai.com")
             resp = client.chat.completions.create(
                 model=model,
                 max_tokens=1024,
@@ -213,7 +236,12 @@ def call_llm_with_tools(
     """Call the LLM with a calculator tool definition, executing any tool calls."""
     try:
         if PROVIDER == "anthropic":
-            _otel_trace.get_current_span().set_attribute("gen_ai.request.top_p", top_p)
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "anthropic")
+            cur.set_attribute("gen_ai.request.top_p", top_p)
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("server.address", "api.anthropic.com")
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
@@ -238,6 +266,7 @@ def call_llm_with_tools(
                 cur.set_attribute("gen_ai.tool.call.id", tool_block.id)
                 cur.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
                 cur.set_attribute("gen_ai.tool.type", "function")
+                cur.set_attribute("gen_ai.tool.call.arguments", json.dumps(tool_block.input))
                 with _tracer.start_as_current_span("execute_tool") as tool_span:
                     tool_span.set_attribute("gen_ai.system", "anthropic")
                     tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -246,7 +275,10 @@ def call_llm_with_tools(
                     tool_span.set_attribute("gen_ai.tool.call.id", tool_block.id)
                     tool_span.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
                     tool_span.set_attribute("gen_ai.tool.type", "function")
+                    tool_span.set_attribute("gen_ai.tool.call.arguments", json.dumps(tool_block.input))
                     tool_result = _safe_eval(tool_block.input.get("expression", ""))
+                    tool_span.set_attribute("gen_ai.tool.call.result", tool_result)
+                cur.set_attribute("gen_ai.tool.call.result", tool_result)
 
                 # Serialize content blocks to plain dicts — instrumentation wrappers
                 # can make SDK objects non-serializable when passed back to the API.
@@ -304,6 +336,12 @@ def call_llm_with_tools(
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ]
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.provider.name", "openai")
+            cur.set_attribute("gen_ai.request.choice.count", 1)
+            cur.set_attribute("gen_ai.request.stream", False)
+            cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("server.address", "api.openai.com")
             resp = client.chat.completions.create(
                 model=model,
                 max_tokens=1024,
@@ -329,6 +367,7 @@ def call_llm_with_tools(
                 cur.set_attribute("gen_ai.tool.call.id", tool_call.id)
                 cur.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
                 cur.set_attribute("gen_ai.tool.type", "function")
+                cur.set_attribute("gen_ai.tool.call.arguments", tool_call.function.arguments)
                 with _tracer.start_as_current_span("execute_tool") as tool_span:
                     tool_span.set_attribute("gen_ai.system", "openai")
                     tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
@@ -337,7 +376,10 @@ def call_llm_with_tools(
                     tool_span.set_attribute("gen_ai.tool.call.id", tool_call.id)
                     tool_span.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
                     tool_span.set_attribute("gen_ai.tool.type", "function")
+                    tool_span.set_attribute("gen_ai.tool.call.arguments", tool_call.function.arguments)
                     tool_result = _safe_eval(args.get("expression", ""))
+                    tool_span.set_attribute("gen_ai.tool.call.result", tool_result)
+                cur.set_attribute("gen_ai.tool.call.result", tool_result)
 
                 messages.append(resp.choices[0].message)
                 messages.append(
