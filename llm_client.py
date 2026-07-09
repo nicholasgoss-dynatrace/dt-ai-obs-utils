@@ -112,6 +112,16 @@ _SERVER_ADDRESS = {
 }
 
 
+def _set_anthropic_cache_attrs(span, usage) -> None:
+    """Set prompt-cache token attributes from an Anthropic usage object."""
+    read = getattr(usage, "cache_read_input_tokens", None) or 0
+    created = getattr(usage, "cache_creation_input_tokens", None) or 0
+    if read:
+        span.set_attribute("gen_ai.usage.cache_read.input_tokens", read)
+    if created:
+        span.set_attribute("gen_ai.usage.cache_creation.input_tokens", created)
+
+
 def _record_llm_error(exc: Exception) -> None:
     """Set gen_ai.error.* and error.type on the current span from a provider exception."""
     body = getattr(exc, "body", None)
@@ -190,6 +200,8 @@ def call_llm(
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
+            cur.set_attribute("gen_ai.output.type", "text")
+            _set_anthropic_cache_attrs(cur, resp.usage)
             return LLMResponse(
                 content=resp.content[0].text,
                 model=resp.model,
@@ -202,6 +214,8 @@ def call_llm(
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
             cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
+            cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
             cur.set_attribute("server.address", "api.openai.com")
             resp = client.chat.completions.create(
                 model=model,
@@ -211,11 +225,14 @@ def call_llm(
                 stop=["\n\nHuman:"],
                 seed=42,
                 n=1,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
             )
+            cur.set_attribute("gen_ai.output.type", "text")
             return LLMResponse(
                 content=resp.choices[0].message.content,
                 model=resp.model,
@@ -319,6 +336,9 @@ def call_llm_with_tools(
                 )
                 total_input += resp2.usage.input_tokens
                 total_output += resp2.usage.output_tokens
+                cur = _otel_trace.get_current_span()
+                cur.set_attribute("gen_ai.output.type", "text")
+                _set_anthropic_cache_attrs(cur, resp.usage)
                 text = next((b.text for b in resp2.content if b.type == "text"), "")
                 return LLMResponse(
                     content=text,
@@ -327,6 +347,9 @@ def call_llm_with_tools(
                     output_tokens=total_output,
                 )
 
+            cur = _otel_trace.get_current_span()
+            cur.set_attribute("gen_ai.output.type", "text")
+            _set_anthropic_cache_attrs(cur, resp.usage)
             text = next((b.text for b in resp.content if b.type == "text"), "")
             return LLMResponse(
                 content=text,
@@ -345,6 +368,8 @@ def call_llm_with_tools(
             cur.set_attribute("gen_ai.request.choice.count", 1)
             cur.set_attribute("gen_ai.request.stream", False)
             cur.set_attribute("gen_ai.request.seed", 42)
+            cur.set_attribute("gen_ai.request.frequency_penalty", 0.0)
+            cur.set_attribute("gen_ai.request.presence_penalty", 0.0)
             cur.set_attribute("server.address", "api.openai.com")
             resp = client.chat.completions.create(
                 model=model,
@@ -354,6 +379,8 @@ def call_llm_with_tools(
                 stop=["\n\nHuman:"],
                 seed=42,
                 n=1,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
                 tools=_OPENAI_TOOLS,
                 messages=messages,
             )
@@ -397,11 +424,14 @@ def call_llm_with_tools(
                     stop=["\n\nHuman:"],
                     seed=42,
                     n=1,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
                     tools=_OPENAI_TOOLS,
                     messages=messages,
                 )
                 total_input += resp2.usage.prompt_tokens
                 total_output += resp2.usage.completion_tokens
+                _otel_trace.get_current_span().set_attribute("gen_ai.output.type", "text")
                 return LLMResponse(
                     content=resp2.choices[0].message.content,
                     model=resp2.model,
@@ -409,6 +439,7 @@ def call_llm_with_tools(
                     output_tokens=total_output,
                 )
 
+            _otel_trace.get_current_span().set_attribute("gen_ai.output.type", "text")
             return LLMResponse(
                 content=resp.choices[0].message.content,
                 model=resp.model,
