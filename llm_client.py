@@ -206,6 +206,8 @@ def call_llm_with_tools(
         if resp.stop_reason == "tool_use":
             tool_block = next(b for b in resp.content if b.type == "tool_use")
             with _tracer.start_as_current_span("execute_tool") as tool_span:
+                tool_span.set_attribute("gen_ai.system", "anthropic")
+                tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
                 tool_span.set_attribute("gen_ai.tool.name", tool_block.name)
                 tool_span.set_attribute("gen_ai.tool_call.id", tool_block.id)
                 tool_span.set_attribute("gen_ai.tool.description", _ANTHROPIC_TOOLS[0]["description"])
@@ -286,6 +288,8 @@ def call_llm_with_tools(
             tool_call = resp.choices[0].message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             with _tracer.start_as_current_span("execute_tool") as tool_span:
+                tool_span.set_attribute("gen_ai.system", "openai")
+                tool_span.set_attribute("gen_ai.operation.name", "execute_tool")
                 tool_span.set_attribute("gen_ai.tool.name", tool_call.function.name)
                 tool_span.set_attribute("gen_ai.tool_call.id", tool_call.id)
                 tool_span.set_attribute("gen_ai.tool.description", _OPENAI_TOOLS[0]["function"]["description"])
