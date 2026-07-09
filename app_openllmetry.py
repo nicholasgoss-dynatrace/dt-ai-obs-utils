@@ -69,6 +69,7 @@ FastAPIInstrumentor.instrument_app(app)
 
 class AskRequest(BaseModel):
     prompt: str
+    model: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -83,8 +84,8 @@ class AskResponse(BaseModel):
 # ── Traceloop-instrumented building blocks ────────────────────────────────────
 
 @task(name="call_llm")
-def call_llm_task(prompt: str) -> dict:
-    resp = llm_client.call_llm(client, MODEL, prompt)
+def call_llm_task(prompt: str, model: str) -> dict:
+    resp = llm_client.call_llm(client, model, prompt)
     return {
         "content": resp.content,
         "model": resp.model,
@@ -94,8 +95,8 @@ def call_llm_task(prompt: str) -> dict:
 
 
 @workflow(name="ask_question")
-def ask_question(prompt: str) -> dict:
-    return call_llm_task(prompt)
+def ask_question(prompt: str, model: str) -> dict:
+    return call_llm_task(prompt, model)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@ def ask_question(prompt: str) -> dict:
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
-    result = ask_question(req.prompt)
+    result = ask_question(req.prompt, req.model or MODEL)
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", result["model"], result["input_tokens"], result["output_tokens"])
     return AskResponse(
         result=result["content"],
