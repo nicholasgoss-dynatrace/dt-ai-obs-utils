@@ -135,6 +135,7 @@ def call_llm(
     prompt: str,
     system: str = "You are a concise technical assistant.",
     temperature: float = 0.7,
+    top_p: float = 0.9,
 ) -> LLMResponse:
     """Call the configured LLM and return a normalized response."""
     if PROVIDER == "anthropic":
@@ -142,6 +143,8 @@ def call_llm(
             model=model,
             max_tokens=1024,
             temperature=temperature,
+            top_p=top_p,
+            stop_sequences=["\n\nHuman:"],
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -156,6 +159,8 @@ def call_llm(
             model=model,
             max_tokens=1024,
             temperature=temperature,
+            top_p=top_p,
+            stop=["\n\nHuman:"],
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -177,6 +182,7 @@ def call_llm_with_tools(
     prompt: str,
     system: str = _TOOL_SYSTEM,
     temperature: float = 0.7,
+    top_p: float = 0.9,
 ) -> LLMResponse:
     """Call the LLM with a calculator tool definition, executing any tool calls."""
     if PROVIDER == "anthropic":
@@ -184,6 +190,8 @@ def call_llm_with_tools(
             model=model,
             max_tokens=1024,
             temperature=temperature,
+            top_p=top_p,
+            stop_sequences=["\n\nHuman:"],
             system=system,
             tools=_ANTHROPIC_TOOLS,
             messages=[{"role": "user", "content": prompt}],
@@ -210,6 +218,8 @@ def call_llm_with_tools(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
+                top_p=top_p,
+                stop_sequences=["\n\nHuman:"],
                 system=system,
                 tools=_ANTHROPIC_TOOLS,
                 messages=[
@@ -254,6 +264,8 @@ def call_llm_with_tools(
             model=model,
             max_tokens=1024,
             temperature=temperature,
+            top_p=top_p,
+            stop=["\n\nHuman:"],
             tools=_OPENAI_TOOLS,
             messages=messages,
         )
@@ -273,6 +285,8 @@ def call_llm_with_tools(
                 model=model,
                 max_tokens=1024,
                 temperature=temperature,
+                top_p=top_p,
+                stop=["\n\nHuman:"],
                 tools=_OPENAI_TOOLS,
                 messages=messages,
             )
