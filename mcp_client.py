@@ -70,8 +70,10 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
     server_params = _make_server_params()
 
     async with stdio_client(server_params) as (read, write):
+        session_id = str(uuid.uuid4())
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init_result = await session.initialize()
+            protocol_version = getattr(init_result, "protocolVersion", "unknown")
 
             # List available tools and build Anthropic tool definitions
             tools_result = await session.list_tools()
@@ -127,14 +129,22 @@ async def _run_mcp_loop(anthropic_client, model: str, prompt: str) -> LLMRespons
                         continue
 
                     request_id = str(uuid.uuid4())
+                    apps_endpoint = _get_apps_endpoint()
+                    resource_uri = f"{apps_endpoint}/api/mcp/tools/{block.name}"
                     with _tracer.start_as_current_span("mcp.tool.call") as span:
                         span.set_attribute("mcp.method.name", "tools/call")
                         span.set_attribute("mcp.server.name", "dynatrace")
                         span.set_attribute("mcp.transport", "stdio")
                         span.set_attribute("mcp.tool.name", block.name)
                         span.set_attribute("mcp.request.id", request_id)
+                        span.set_attribute("mcp.session_id", session_id)
+                        span.set_attribute("mcp.protocol.version", protocol_version)
+                        span.set_attribute("mcp.resource.uri", resource_uri)
 
                         tool_response = await session.call_tool(block.name, block.input)
+
+                        is_error = bool(getattr(tool_response, "isError", False))
+                        span.set_attribute("mcp.is_error", is_error)
 
                     # Extract text from tool result content items
                     result_text = ""
