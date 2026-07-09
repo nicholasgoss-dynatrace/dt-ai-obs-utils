@@ -58,7 +58,7 @@ def _make_server_params() -> StdioServerParameters:
     env = {**os.environ, "DT_ENVIRONMENT": apps_endpoint, "DT_PLATFORM_TOKEN": platform_token}
     return StdioServerParameters(
         command="node",
-        args=["/usr/local/lib/node_modules/@dynatrace-oss/dynatrace-mcp-server/dist/index.js"],
+        args=["/usr/lib/node_modules/@dynatrace-oss/dynatrace-mcp-server/index.js"],
         env=env,
     )
 
