@@ -44,6 +44,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
@@ -112,6 +113,7 @@ FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
+    use_tools: bool = False
 
 
 class AskResponse(BaseModel):
@@ -128,8 +130,15 @@ class AskResponse(BaseModel):
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
     """OpenInference instrumentor auto-records the LLM span on every client call."""
-    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
-    resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    try:
+        if req.use_tools:
+            resp = llm_client.call_llm_with_tools(client, req.model or MODEL, req.prompt)
+        else:
+            resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
+    except Exception as exc:
+        trace.get_current_span().record_exception(exc)
+        raise
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
         result=resp.content,

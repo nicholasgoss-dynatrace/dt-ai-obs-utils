@@ -10,6 +10,9 @@ Model defaults per provider (override with MODEL env var):
   openai    → gpt-4o-mini
 """
 
+import ast
+import json
+import operator as op
 import os
 from dataclasses import dataclass
 
@@ -19,6 +22,85 @@ _MODEL_DEFAULTS = {
     "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o-mini",
 }
+
+# ── Tool definitions ──────────────────────────────────────────────────────────
+
+_ANTHROPIC_TOOLS = [
+    {
+        "name": "calculator",
+        "description": "Evaluate arithmetic expressions. Use this when asked to compute a number.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Arithmetic expression to evaluate, e.g. '347 * 29 + 15'",
+                }
+            },
+            "required": ["expression"],
+        },
+    }
+]
+
+_OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Evaluate arithmetic expressions. Use this when asked to compute a number.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Arithmetic expression to evaluate, e.g. '347 * 29 + 15'",
+                    }
+                },
+                "required": ["expression"],
+            },
+        },
+    }
+]
+
+_TOOL_SYSTEM = (
+    "You are a concise technical assistant. "
+    "Use the calculator tool when asked to compute numbers."
+)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+_SAFE_OPS = {
+    ast.Add: op.add,
+    ast.Sub: op.sub,
+    ast.Mult: op.mul,
+    ast.Div: op.truediv,
+    ast.Pow: op.pow,
+    ast.Mod: op.mod,
+    ast.FloorDiv: op.floordiv,
+    ast.USub: op.neg,
+}
+
+
+def _safe_eval(expression: str) -> str:
+    """Evaluate a simple arithmetic expression without using eval()."""
+    def _eval(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.operand))
+        raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+        result = _eval(tree.body)
+        return str(round(result, 6) if isinstance(result, float) else result)
+    except Exception as exc:
+        return f"error: {exc}"
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 def default_model() -> str:
@@ -52,12 +134,14 @@ def call_llm(
     model: str,
     prompt: str,
     system: str = "You are a concise technical assistant.",
+    temperature: float = 0.7,
 ) -> LLMResponse:
     """Call the configured LLM and return a normalized response."""
     if PROVIDER == "anthropic":
         resp = client.messages.create(
             model=model,
             max_tokens=1024,
+            temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -71,6 +155,7 @@ def call_llm(
         resp = client.chat.completions.create(
             model=model,
             max_tokens=1024,
+            temperature=temperature,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -84,3 +169,117 @@ def call_llm(
         )
     else:
         raise ValueError(f"Unsupported PROVIDER in call_llm: {PROVIDER!r}")
+
+
+def call_llm_with_tools(
+    client,
+    model: str,
+    prompt: str,
+    system: str = _TOOL_SYSTEM,
+    temperature: float = 0.7,
+) -> LLMResponse:
+    """Call the LLM with a calculator tool definition, executing any tool calls."""
+    if PROVIDER == "anthropic":
+        resp = client.messages.create(
+            model=model,
+            max_tokens=1024,
+            temperature=temperature,
+            system=system,
+            tools=_ANTHROPIC_TOOLS,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        total_input = resp.usage.input_tokens
+        total_output = resp.usage.output_tokens
+
+        if resp.stop_reason == "tool_use":
+            tool_block = next(b for b in resp.content if b.type == "tool_use")
+            tool_result = _safe_eval(tool_block.input.get("expression", ""))
+
+            resp2 = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                temperature=temperature,
+                system=system,
+                tools=_ANTHROPIC_TOOLS,
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": resp.content},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_block.id,
+                                "content": tool_result,
+                            }
+                        ],
+                    },
+                ],
+            )
+            total_input += resp2.usage.input_tokens
+            total_output += resp2.usage.output_tokens
+            text = next((b.text for b in resp2.content if b.type == "text"), "")
+            return LLMResponse(
+                content=text,
+                model=resp2.model,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        return LLMResponse(
+            content=text,
+            model=resp.model,
+            input_tokens=total_input,
+            output_tokens=total_output,
+        )
+
+    elif PROVIDER == "openai":
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        resp = client.chat.completions.create(
+            model=model,
+            max_tokens=1024,
+            temperature=temperature,
+            tools=_OPENAI_TOOLS,
+            messages=messages,
+        )
+        total_input = resp.usage.prompt_tokens
+        total_output = resp.usage.completion_tokens
+
+        if resp.choices[0].finish_reason == "tool_calls":
+            tool_call = resp.choices[0].message.tool_calls[0]
+            args = json.loads(tool_call.function.arguments)
+            tool_result = _safe_eval(args.get("expression", ""))
+
+            messages.append(resp.choices[0].message)
+            messages.append(
+                {"role": "tool", "tool_call_id": tool_call.id, "content": tool_result}
+            )
+            resp2 = client.chat.completions.create(
+                model=model,
+                max_tokens=1024,
+                temperature=temperature,
+                tools=_OPENAI_TOOLS,
+                messages=messages,
+            )
+            total_input += resp2.usage.prompt_tokens
+            total_output += resp2.usage.completion_tokens
+            return LLMResponse(
+                content=resp2.choices[0].message.content,
+                model=resp2.model,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        return LLMResponse(
+            content=resp.choices[0].message.content,
+            model=resp.model,
+            input_tokens=total_input,
+            output_tokens=total_output,
+        )
+
+    else:
+        raise ValueError(f"Unsupported PROVIDER in call_llm_with_tools: {PROVIDER!r}")

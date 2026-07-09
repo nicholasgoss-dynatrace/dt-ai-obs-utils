@@ -36,6 +36,7 @@ import os
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from opentelemetry import trace
 from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from traceloop.sdk import Traceloop
@@ -70,6 +71,7 @@ FastAPIInstrumentor.instrument_app(app)
 class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
+    use_tools: bool = False
 
 
 class AskResponse(BaseModel):
@@ -84,8 +86,15 @@ class AskResponse(BaseModel):
 # ── Traceloop-instrumented building blocks ────────────────────────────────────
 
 @task(name="call_llm")
-def call_llm_task(prompt: str, model: str) -> dict:
-    resp = llm_client.call_llm(client, model, prompt)
+def call_llm_task(prompt: str, model: str, use_tools: bool = False) -> dict:
+    try:
+        if use_tools:
+            resp = llm_client.call_llm_with_tools(client, model, prompt)
+        else:
+            resp = llm_client.call_llm(client, model, prompt)
+    except Exception as exc:
+        trace.get_current_span().record_exception(exc)
+        raise
     return {
         "content": resp.content,
         "model": resp.model,
@@ -95,16 +104,16 @@ def call_llm_task(prompt: str, model: str) -> dict:
 
 
 @workflow(name="ask_question")
-def ask_question(prompt: str, model: str) -> dict:
-    return call_llm_task(prompt, model)
+def ask_question(prompt: str, model: str, use_tools: bool = False) -> dict:
+    return call_llm_task(prompt, model, use_tools)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
-    result = ask_question(req.prompt, req.model or MODEL)
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    result = ask_question(req.prompt, req.model or MODEL, req.use_tools)
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", result["model"], result["input_tokens"], result["output_tokens"])
     return AskResponse(
         result=result["content"],

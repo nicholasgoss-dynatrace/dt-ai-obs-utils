@@ -59,12 +59,17 @@ make_error_payload() {
     python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'model': sys.argv[2]}))" "$1" "$2"
 }
 
+make_tool_payload() {
+    python3 -c "import json,sys; print(json.dumps({'prompt': sys.argv[1], 'use_tools': True}))" "$1"
+}
+
 call_service() {
     local name="$1"
     local port="$2"
     local payload="$3"
     local expect_error="${4:-false}"
 
+    local response
     response=$(curl -s -X POST "http://localhost:${port}/ask" \
         -H "Content-Type: application/json" \
         -d "$payload" \
@@ -75,26 +80,47 @@ call_service() {
         return
     fi
 
-    python3 -c "
+    python3 - "$name" "$expect_error" <<'PYEOF'
 import sys, json
-expect_error = '$expect_error' == 'true'
+
+name         = sys.argv[1]
+expect_error = sys.argv[2] == "true"
+raw          = sys.stdin.read()
+
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(raw)
     if expect_error:
-        detail = d.get('detail', str(d))[:120]
-        print(f'    {\"$name\":<14}  [EXPECTED ERROR] {detail}')
+        detail = d.get("detail", raw)
+        print(f"    {name:<14}  [EXPECTED ERROR] {str(detail)[:120]}")
     else:
-        tokens_in  = d.get('input_tokens', '?')
-        tokens_out = d.get('output_tokens', '?')
-        model      = d.get('model', 'n/a')
-        snippet    = d.get('result', '')[:120].replace('\n', ' ')
-        print(f'    {\"$name\":<14}  [{model}] in={tokens_in} out={tokens_out}  \"{snippet}...\"')
-except Exception as e:
-    if expect_error:
-        print(f'    {\"$name\":<14}  [EXPECTED ERROR] {\"$response\"[:120]}')
-    else:
-        print(f'    {\"$name\":<14}  PARSE ERROR: {e}')
-" <<< "$response" 2>/dev/null || printf "    %-14s  RAW: %s\n" "$name" "${response:0:120}"
+        tokens_in  = d.get("input_tokens", "?")
+        tokens_out = d.get("output_tokens", "?")
+        model      = d.get("model", "n/a")
+        snippet    = d.get("result", "")[:120].replace("\n", " ")
+        print(f"    {name:<14}  [{model}] in={tokens_in} out={tokens_out}  \"{snippet}...\"")
+except Exception:
+    prefix = "[EXPECTED ERROR]" if expect_error else "PARSE ERROR"
+    print(f"    {name:<14}  {prefix}: {raw[:120]}")
+PYEOF <<< "$response"
+}
+
+run_tool_round() {
+    local prompt="What is 1234 * 5678 + 999? Also, how many seconds are in a leap year (366 days)?"
+    local payload
+    payload=$(make_tool_payload "$prompt")
+
+    echo ""
+    printf "  ── Tool-use round ───────────────────────────────────────────────────────\n"
+    echo ""
+    echo "  [TOOL USE]  Arithmetic prompt to invoke the calculator tool"
+    printf "  Prompt: \"%s\"\n" "${prompt:0:90}"
+
+    call_service "OneAgent"      8001 "$payload" &
+    call_service "OpenLLMetry"   8002 "$payload" &
+    call_service "OpenInference" 8003 "$payload" &
+    wait
+    echo ""
+    echo "  Verify in Dynatrace: LLM spans should carry gen_ai.tool.name and tool call events."
 }
 
 run_error_round() {
@@ -156,6 +182,9 @@ else
             sleep 2
         fi
     done
+
+    sleep 2
+    run_tool_round
 
     sleep 2
     run_error_round

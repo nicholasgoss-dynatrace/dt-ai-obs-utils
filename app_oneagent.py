@@ -52,6 +52,7 @@ MODEL = llm_client.default_model()
 class AskRequest(BaseModel):
     prompt: str
     model: str | None = None
+    use_tools: bool = False
 
 
 class AskResponse(BaseModel):
@@ -65,8 +66,11 @@ class AskResponse(BaseModel):
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
-    logger.info("ask request received prompt_length=%d provider=%s", len(req.prompt), llm_client.PROVIDER)
-    resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
+    logger.info("ask request received prompt_length=%d provider=%s use_tools=%s", len(req.prompt), llm_client.PROVIDER, req.use_tools)
+    if req.use_tools:
+        resp = llm_client.call_llm_with_tools(client, req.model or MODEL, req.prompt)
+    else:
+        resp = llm_client.call_llm(client, req.model or MODEL, req.prompt)
     logger.info("llm response model=%s input_tokens=%d output_tokens=%d", resp.model, resp.input_tokens, resp.output_tokens)
     return AskResponse(
         result=resp.content,
