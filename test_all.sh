@@ -80,12 +80,12 @@ call_service() {
         return
     fi
 
-    python3 - "$name" "$expect_error" <<'PYEOF'
+    python3 - "$name" "$expect_error" "$response" <<'PYEOF'
 import sys, json
 
 name         = sys.argv[1]
 expect_error = sys.argv[2] == "true"
-raw          = sys.stdin.read()
+raw          = sys.argv[3]
 
 try:
     d = json.loads(raw)
@@ -101,7 +101,7 @@ try:
 except Exception:
     prefix = "[EXPECTED ERROR]" if expect_error else "PARSE ERROR"
     print(f"    {name:<14}  {prefix}: {raw[:120]}")
-PYEOF <<< "$response"
+PYEOF
 }
 
 run_tool_round() {
