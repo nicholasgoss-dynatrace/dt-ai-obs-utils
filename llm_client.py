@@ -229,8 +229,6 @@ def call_llm(
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
-                temperature=temperature,
-                top_k=40,
                 stop_sequences=["\n\nHuman:"],
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
@@ -306,8 +304,6 @@ def call_llm_with_tools(
             resp = client.messages.create(
                 model=model,
                 max_tokens=1024,
-                temperature=temperature,
-                top_k=40,
                 stop_sequences=["\n\nHuman:"],
                 system=system,
                 tools=_ANTHROPIC_TOOLS,
@@ -356,7 +352,6 @@ def call_llm_with_tools(
                 resp2 = client.messages.create(
                     model=model,
                     max_tokens=1024,
-                    temperature=temperature,
                     stop_sequences=["\n\nHuman:"],
                     system=system,
                     tools=_ANTHROPIC_TOOLS,
